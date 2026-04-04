@@ -23,6 +23,7 @@ export function AuthForm({ mode }: AuthFormProps) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [resetSent, setResetSent] = useState(false);
+  const [confirmationSent, setConfirmationSent] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -48,9 +49,11 @@ export function AuthForm({ mode }: AuthFormProps) {
           setLoading(false);
           return;
         }
-        const { error } = await signUp(email, password, name);
+        const { error, needsConfirmation } = await signUp(email, password, name);
         if (error) {
           setError(error);
+        } else if (needsConfirmation) {
+          setConfirmationSent(true);
         } else {
           router.push("/onboarding");
         }
@@ -108,64 +111,79 @@ export function AuthForm({ mode }: AuthFormProps) {
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-          {!isLogin && (
+        {confirmationSent && (
+          <div className="bg-gordemy-blue/10 border border-gordemy-blue/30 rounded-xl px-4 py-5 mb-4 text-center">
+            <div className="text-3xl mb-2">📧</div>
+            <p className="text-sm font-semibold text-white mb-1">Перевір свою пошту!</p>
+            <p className="text-sm text-gordemy-muted">
+              Надіслали лист підтвердження на <span className="text-white">{email}</span>.
+              Перейди за посиланням у листі щоб активувати акаунт і почати підготовку.
+            </p>
+          </div>
+        )}
+
+        {!confirmationSent && (
+          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+            {!isLogin && (
+              <Input
+                label="Ім'я"
+                placeholder="Як тебе звати?"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                required
+              />
+            )}
             <Input
-              label="Ім'я"
-              placeholder="Як тебе звати?"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
+              label="Email"
+              type="email"
+              placeholder="your@email.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
               required
             />
-          )}
-          <Input
-            label="Email"
-            type="email"
-            placeholder="your@email.com"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
-          <Input
-            label="Пароль"
-            type="password"
-            placeholder="••••••••"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            minLength={6}
-          />
+            <Input
+              label="Пароль"
+              type="password"
+              placeholder="••••••••"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              minLength={6}
+            />
 
-          {isLogin && (
-            <div className="text-right">
-              <button
-                type="button"
-                onClick={handleReset}
-                className="text-sm text-gordemy-blue hover:underline"
-              >
-                Забув пароль?
-              </button>
-            </div>
-          )}
+            {isLogin && (
+              <div className="text-right">
+                <button
+                  type="button"
+                  onClick={handleReset}
+                  className="text-sm text-gordemy-blue hover:underline"
+                >
+                  Забув пароль?
+                </button>
+              </div>
+            )}
 
-          <GlowButton type="submit" fullWidth className="!mt-2" disabled={loading}>
-            {loading
-              ? "Зачекай..."
-              : isLogin
-              ? "Увійти"
-              : "Створити акаунт"}
-          </GlowButton>
-        </form>
+            <GlowButton type="submit" fullWidth className="!mt-2" disabled={loading}>
+              {loading
+                ? "Зачекай..."
+                : isLogin
+                ? "Увійти"
+                : "Створити акаунт"}
+            </GlowButton>
+          </form>
+        )}
 
-        <div className="text-center mt-6 text-sm text-gordemy-muted">
-          {isLogin ? "Ще немає акаунту? " : "Вже є акаунт? "}
-          <Link
-            href={isLogin ? "/register" : "/login"}
-            className="text-gordemy-blue font-semibold hover:underline"
-          >
-            {isLogin ? "Зареєструватись" : "Увійти"}
-          </Link>
-        </div>
+        {!confirmationSent && (
+          <div className="text-center mt-6 text-sm text-gordemy-muted">
+            {isLogin ? "Ще немає акаунту? " : "Вже є акаунт? "}
+            <Link
+              href={isLogin ? "/register" : "/login"}
+              className="text-gordemy-blue font-semibold hover:underline"
+            >
+              {isLogin ? "Зареєструватись" : "Увійти"}
+            </Link>
+          </div>
+        )}
       </motion.div>
     </div>
   );

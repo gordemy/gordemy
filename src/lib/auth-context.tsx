@@ -17,7 +17,7 @@ interface AuthState {
 }
 
 interface AuthContextType extends AuthState {
-  signUp: (email: string, password: string, name: string) => Promise<{ error: string | null }>;
+  signUp: (email: string, password: string, name: string) => Promise<{ error: string | null; needsConfirmation?: boolean }>;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
   resetPassword: (email: string) => Promise<{ error: string | null }>;
@@ -59,22 +59,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     if (error) return { error: error.message };
 
-    // Create student profile
+    // If session is null — Supabase requires email confirmation
+    if (!data.session) {
+      return { error: null, needsConfirmation: true };
+    }
+
+    // Session is active — upsert student profile (trigger may have already created it)
     if (data.user) {
       const { error: profileError } = await supabase
         .from("students")
-        .insert({
-          id: data.user.id,
-          email,
-          name,
-        });
+        .upsert(
+          { id: data.user.id, email, name },
+          { onConflict: "id", ignoreDuplicates: true }
+        );
 
       if (profileError) {
-        console.error("Profile creation error:", profileError);
+        console.error("Profile upsert error:", profileError);
       }
     }
 
-    return { error: null };
+    return { error: null, needsConfirmation: false };
   };
 
   const signIn = async (email: string, password: string) => {
