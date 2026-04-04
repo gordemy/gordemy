@@ -52,12 +52,15 @@ export default function OnboardingPage() {
   const progress = ((step + 1) / TOTAL_STEPS) * 100;
 
   const saveOnboarding = async () => {
-    if (!user) return;
+    if (!user) {
+      router.push("/dashboard");
+      return;
+    }
     setSaving(true);
 
     try {
       // Update student profile with onboarding data
-      await supabase
+      const { error: updateError } = await supabase
         .from("students")
         .update({
           grade: answers.grade,
@@ -65,25 +68,30 @@ export default function OnboardingPage() {
           target_score: answers.targetScore,
           study_time_minutes: answers.studyTime,
           onboarding_completed: true,
-          xp: 50, // Bonus XP for completing onboarding
+          xp: 50,
         })
         .eq("id", user.id);
 
-      // Save individual answers for analytics
-      const onboardingRows = [
+      if (updateError) {
+        console.error("Update error:", updateError);
+      }
+
+      // Save individual answers for analytics (non-blocking)
+      supabase.from("onboarding_answers").insert([
         { student_id: user.id, step_number: 1, step_name: "grade", answer: { grade: answers.grade } },
         { student_id: user.id, step_number: 2, step_name: "subjects", answer: { subjects: answers.subjects } },
         { student_id: user.id, step_number: 3, step_name: "target_score", answer: { target_score: answers.targetScore } },
         { student_id: user.id, step_number: 4, step_name: "study_time", answer: { study_time: answers.studyTime } },
-      ];
+      ]).then(({ error }) => {
+        if (error) console.error("Onboarding answers error:", error);
+      });
 
-      await supabase.from("onboarding_answers").insert(onboardingRows);
-
-      router.push("/");
     } catch (err) {
       console.error("Failed to save onboarding:", err);
     } finally {
       setSaving(false);
+      // Always navigate to dashboard, even if save fails
+      router.push("/dashboard");
     }
   };
 
