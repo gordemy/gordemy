@@ -44,24 +44,26 @@ export interface Question {
 }
 
 export async function getStudent(userId: string): Promise<Student | null> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("students")
     .select("*")
     .eq("id", userId)
     .single();
+  if (error) console.error("getStudent error:", error);
   return data;
 }
 
 export async function getTodayTasks(userId: string): Promise<(Task & { question: Question | null })[]> {
   const today = new Date().toISOString().split("T")[0];
 
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("tasks")
     .select("*, question:questions(*)")
     .eq("student_id", userId)
     .eq("date", today)
     .order("completed", { ascending: true });
 
+  if (error) console.error("getTodayTasks error:", error);
   return (data as any) || [];
 }
 
@@ -69,20 +71,23 @@ export async function generateDailyTasks(userId: string, subjects: string[]): Pr
   const today = new Date().toISOString().split("T")[0];
 
   // Check if tasks already exist for today
-  const { data: existing } = await supabase
+  const { data: existing, error: checkError } = await supabase
     .from("tasks")
     .select("id")
     .eq("student_id", userId)
     .eq("date", today);
 
+  if (checkError) console.error("Check tasks error:", checkError);
   if (existing && existing.length > 0) return;
 
   // Pick random questions from student's subjects
-  const { data: questions } = await supabase
+  const subjectsToUse = subjects.length > 0 ? subjects : ["ukr", "math", "hist", "eng"];
+  const { data: questions, error: qError } = await supabase
     .from("questions")
     .select("*")
-    .in("subject", subjects.length > 0 ? subjects : ["ukr", "math", "hist", "eng"]);
+    .in("subject", subjectsToUse);
 
+  if (qError) console.error("Fetch questions error:", qError);
   if (!questions || questions.length === 0) return;
 
   // Shuffle and pick 5 tasks
@@ -117,7 +122,8 @@ export async function generateDailyTasks(userId: string, subjects: string[]): Pr
     completed: false,
   }));
 
-  await supabase.from("tasks").insert(tasks);
+  const { error: insertError } = await supabase.from("tasks").insert(tasks);
+  if (insertError) console.error("Insert tasks error:", insertError);
 }
 
 export async function completeTask(
@@ -131,7 +137,7 @@ export async function completeTask(
   const today = now.toISOString().split("T")[0];
 
   // Mark task as completed
-  await supabase
+  const { error: taskError } = await supabase
     .from("tasks")
     .update({
       completed: true,
@@ -140,6 +146,8 @@ export async function completeTask(
       completed_at: now.toISOString(),
     })
     .eq("id", taskId);
+
+  if (taskError) console.error("Complete task error:", taskError);
 
   // Get current student data
   const { data: student } = await supabase
@@ -162,9 +170,9 @@ export async function completeTask(
 
   let newStreak = student.streak || 0;
   if (lastActive === yesterdayStr) {
-    newStreak += 1; // Continue streak
+    newStreak += 1;
   } else if (lastActive !== today) {
-    newStreak = 1; // Reset streak
+    newStreak = 1;
   }
 
   // Calculate level (every 100 XP = 1 level)
@@ -172,7 +180,7 @@ export async function completeTask(
   const levelUp = newLevel > (student.level || 1);
 
   // Update student
-  await supabase
+  const { error: updateError } = await supabase
     .from("students")
     .update({
       xp: newXp,
@@ -182,6 +190,8 @@ export async function completeTask(
       total_tasks_completed: (student.total_tasks_completed || 0) + 1,
     })
     .eq("id", userId);
+
+  if (updateError) console.error("Update student error:", updateError);
 
   return { newXp: earnedXp, newStreak, levelUp };
 }
