@@ -1,4 +1,20 @@
 import { supabase } from "./supabase";
+import { checkAndAwardAchievements, getStudentAchievements, type Achievement } from "./achievements";
+
+export interface LeaderboardEntry {
+  id: string;
+  name: string;
+  level: number;
+  xp: number;
+  streak: number;
+  total_tasks_completed: number;
+}
+
+export async function getLeaderboard(): Promise<LeaderboardEntry[]> {
+  const { data, error } = await supabase.from("leaderboard").select("*");
+  if (error) console.error("getLeaderboard error:", error);
+  return (data || []) as LeaderboardEntry[];
+}
 
 export interface Student {
   id: string;
@@ -181,7 +197,7 @@ export async function completeTask(
   answerGiven: number,
   isCorrect: boolean,
   xpReward: number
-): Promise<{ newXp: number; newStreak: number; levelUp: boolean }> {
+): Promise<{ newXp: number; newStreak: number; levelUp: boolean; newAchievements: Achievement[] }> {
   const now = new Date();
   const today = now.toISOString().split("T")[0];
 
@@ -205,7 +221,7 @@ export async function completeTask(
     .eq("id", userId)
     .single();
 
-  if (!student) return { newXp: 0, newStreak: 0, levelUp: false };
+  if (!student) return { newXp: 0, newStreak: 0, levelUp: false, newAchievements: [] };
 
   // Calculate XP (bonus for correct answer)
   const earnedXp = isCorrect ? xpReward : Math.floor(xpReward / 2);
@@ -242,5 +258,31 @@ export async function completeTask(
 
   if (updateError) console.error("Update student error:", updateError);
 
-  return { newXp: earnedXp, newStreak, levelUp };
+  // Get today's tasks for context
+  const { data: todayTasksData } = await supabase
+    .from("tasks")
+    .select("subject, is_correct, completed")
+    .eq("student_id", userId)
+    .eq("date", today)
+    .eq("completed", true);
+
+  const todayDone = todayTasksData || [];
+  const todaySubjects = [...new Set(todayDone.map((t: any) => t.subject))];
+  const todayCorrect = todayDone.filter((t: any) => t.is_correct).length;
+
+  // Check and award achievements
+  const earnedKeys = await getStudentAchievements(userId);
+  const newAchievements = await checkAndAwardAchievements(userId, {
+    totalTasksCompleted: (student.total_tasks_completed || 0) + 1,
+    xp: newXp,
+    streak: newStreak,
+    level: newLevel,
+    isCorrect,
+    todayCorrect,
+    todayTotal: todayDone.length,
+    todaySubjects,
+    earnedKeys,
+  });
+
+  return { newXp: earnedXp, newStreak, levelUp, newAchievements };
 }

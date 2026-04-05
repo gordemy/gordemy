@@ -7,6 +7,8 @@ import { useAuth } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase";
 import { completeTask, type Task, type Question } from "@/lib/student";
 import { GlowButton } from "@/components/ui/glow-button";
+import { AchievementPopup } from "@/components/achievement-popup";
+import type { Achievement } from "@/lib/achievements";
 
 type TaskWithQuestion = Task & { question: Question | null };
 
@@ -26,6 +28,8 @@ function LearnContent() {
     newStreak: number;
     levelUp: boolean;
   } | null>(null);
+  const [pendingAchievements, setPendingAchievements] = useState<Achievement[]>([]);
+  const [currentPopup, setCurrentPopup] = useState<Achievement | null>(null);
 
   useEffect(() => {
     if (authLoading) return;
@@ -62,7 +66,7 @@ function LearnContent() {
     setSubmitted(true);
 
     const isCorrect = selectedAnswer === task.question.correct_answer;
-    const { newXp, newStreak, levelUp } = await completeTask(
+    const { newXp, newStreak, levelUp, newAchievements } = await completeTask(
       user.id,
       task.id,
       selectedAnswer,
@@ -70,12 +74,13 @@ function LearnContent() {
       task.xp_reward
     );
 
-    setResult({
-      isCorrect,
-      earnedXp: newXp,
-      newStreak,
-      levelUp,
-    });
+    setResult({ isCorrect, earnedXp: newXp, newStreak, levelUp });
+
+    // Queue achievement popups
+    if (newAchievements.length > 0) {
+      setPendingAchievements(newAchievements.slice(1));
+      setCurrentPopup(newAchievements[0]);
+    }
   };
 
   if (authLoading || loading) {
@@ -102,8 +107,18 @@ function LearnContent() {
     hard: "text-gordemy-orange",
   };
 
+  const handlePopupClose = () => {
+    if (pendingAchievements.length > 0) {
+      setCurrentPopup(pendingAchievements[0]);
+      setPendingAchievements(prev => prev.slice(1));
+    } else {
+      setCurrentPopup(null);
+    }
+  };
+
   return (
     <div className="max-w-[520px] mx-auto px-6 py-8">
+      <AchievementPopup achievement={currentPopup} onClose={handlePopupClose} />
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <button

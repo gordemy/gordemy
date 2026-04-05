@@ -12,6 +12,7 @@ import {
 import { GlowButton } from "@/components/ui/glow-button";
 import { DashboardSkeleton } from "@/components/ui/loading";
 import Link from "next/link";
+import { getLeague, getStudentAchievements, getAllAchievements, type Achievement } from "@/lib/achievements";
 
 type TaskWithQuestion = Task & { question: Question | null };
 
@@ -67,6 +68,7 @@ export default function DashboardPage() {
   const [subjectProgress, setSubjectProgress] = useState<SubjectProgress[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [recentAchievements, setRecentAchievements] = useState<Achievement[]>([]);
 
   useEffect(() => {
     if (authLoading) return;
@@ -79,12 +81,17 @@ export default function DashboardPage() {
 
       setStudent(s);
       await generateDailyTasks(user!.id, s.subjects || []);
-      const [todayTasks, progress] = await Promise.all([
+      const [todayTasks, progress, earnedKeys, allAch] = await Promise.all([
         getTodayTasks(user!.id),
         getSubjectProgress(user!.id),
+        getStudentAchievements(user!.id),
+        getAllAchievements(),
       ]);
       setTasks(todayTasks);
       setSubjectProgress(progress);
+      // Show last 3 earned achievements
+      const earned = allAch.filter(a => earnedKeys.includes(a.key)).slice(-3).reverse();
+      setRecentAchievements(earned);
       setLoading(false);
     }
 
@@ -106,6 +113,7 @@ export default function DashboardPage() {
   const completedCount = tasks.filter((t) => t.completed).length;
   const totalTasks = tasks.length;
   const todayProgress = totalTasks > 0 ? (completedCount / totalTasks) * 100 : 0;
+  const league = getLeague(student.xp || 0);
   const xpForCurrentLevel = (student.level || 1 - 1) * 100;
   const xpForNextLevel = (student.level || 1) * 100;
   const xpProgress = Math.min(100, Math.round(((student.xp || 0) % 100)));
@@ -139,6 +147,44 @@ export default function DashboardPage() {
             : `${completedCount} з ${totalTasks} завдань виконано сьогодні`}
         </p>
       </motion.div>
+
+      {/* League Badge */}
+      <motion.div
+        initial={{ opacity: 0, scale: 0.9 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ delay: 0.05 }}
+        className="flex items-center gap-3 mb-6"
+      >
+        <div className={`flex items-center gap-2 px-4 py-2 rounded-xl border text-sm font-bold ${league.bg}`}>
+          <span className="text-xl">{league.icon}</span>
+          <span className={league.color}>{league.name}</span>
+        </div>
+        <Link href="/leaderboard" className="text-xs text-gordemy-muted hover:text-gordemy-blue transition-colors">
+          Дивитись рейтинг →
+        </Link>
+        <Link href="/achievements" className="ml-auto text-xs text-gordemy-muted hover:text-gordemy-orange transition-colors">
+          🏆 Досягнення
+        </Link>
+      </motion.div>
+
+      {/* Recent Achievements */}
+      {recentAchievements.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.08 }}
+          className="flex gap-2 mb-6 flex-wrap"
+        >
+          {recentAchievements.map(a => (
+            <Link key={a.key} href="/achievements">
+              <div className="flex items-center gap-1.5 bg-gordemy-card border border-gordemy-border rounded-xl px-3 py-1.5 text-xs font-semibold hover:border-gordemy-muted/50 transition-all">
+                <span>{a.icon}</span>
+                <span>{a.name}</span>
+              </div>
+            </Link>
+          ))}
+        </motion.div>
+      )}
 
       {/* Stats Grid */}
       <motion.div
