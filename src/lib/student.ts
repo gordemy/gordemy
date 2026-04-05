@@ -267,7 +267,7 @@ export async function completeTask(
     .eq("completed", true);
 
   const todayDone = todayTasksData || [];
-  const todaySubjects = [...new Set(todayDone.map((t: any) => t.subject))];
+  const todaySubjects = Array.from(new Set(todayDone.map((t: any) => t.subject)));
   const todayCorrect = todayDone.filter((t: any) => t.is_correct).length;
 
   // Check and award achievements
