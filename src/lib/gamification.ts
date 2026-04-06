@@ -236,6 +236,163 @@ export async function applyStreakShield(studentId: string): Promise<boolean> {
   return true;
 }
 
+// ─── XP Multiplier (hour-based) ──────────────────────────────────────────────
+
+export function getXPMultiplier(): { multiplier: number; label: string; active: boolean; emoji: string } {
+  const hour = new Date().getHours();
+  if (hour >= 6 && hour < 9)  return { multiplier: 1.5, label: "Ранковий бонус",  active: true,  emoji: "🌅" };
+  if (hour >= 21 && hour <= 23) return { multiplier: 1.25, label: "Нічний бонус", active: true,  emoji: "🌙" };
+  if (hour >= 12 && hour <= 14) return { multiplier: 1.1, label: "Обідній бонус", active: true,  emoji: "☀️" };
+  return { multiplier: 1, label: "", active: false, emoji: "" };
+}
+
+export function applyMultiplier(xp: number): number {
+  return Math.round(xp * getXPMultiplier().multiplier);
+}
+
+// ─── Speed Bonus ─────────────────────────────────────────────────────────────
+
+export function getSpeedBonus(secondsTaken: number): { bonusXP: number; label: string; emoji: string } {
+  if (secondsTaken <= 8)  return { bonusXP: 20, label: "Блискавка!",  emoji: "⚡" };
+  if (secondsTaken <= 15) return { bonusXP: 10, label: "Швидко!",     emoji: "🚀" };
+  if (secondsTaken <= 25) return { bonusXP: 5,  label: "Непогано!",   emoji: "👍" };
+  return { bonusXP: 0, label: "", emoji: "" };
+}
+
+// ─── Player Title ─────────────────────────────────────────────────────────────
+
+export function getPlayerTitle(level: number, totalTasks: number, streak: number): { title: string; color: string } {
+  if (level >= 20) return { title: "🔱 Легенда НМТ",    color: "text-gordemy-orange" };
+  if (level >= 15) return { title: "💎 Майстер",         color: "text-gordemy-purple" };
+  if (level >= 10) return { title: "🏆 Чемпіон",         color: "text-gordemy-blue" };
+  if (level >= 7)  return { title: "⭐ Досвідчений",      color: "text-gordemy-blue" };
+  if (level >= 5)  return { title: "🎓 Учень",            color: "text-gordemy-green" };
+  if (streak >= 10) return { title: "🔥 Залізна воля",   color: "text-gordemy-orange" };
+  if (totalTasks >= 50) return { title: "📚 Зубрило",    color: "text-gordemy-muted" };
+  return { title: "🌱 Новачок",                           color: "text-gordemy-muted" };
+}
+
+// ─── Mystery Box ──────────────────────────────────────────────────────────────
+
+type MysteryReward = { type: string; value: number; label: string; emoji: string; rarity: "common" | "rare" | "epic" };
+
+const MYSTERY_REWARDS: MysteryReward[] = [
+  { type: "xp",     value: 50,  label: "50 XP",         emoji: "💎", rarity: "common" },
+  { type: "xp",     value: 100, label: "100 XP",        emoji: "💎", rarity: "rare"   },
+  { type: "xp",     value: 200, label: "200 XP",        emoji: "🔮", rarity: "epic"   },
+  { type: "gems",   value: 5,   label: "5 Гемів",       emoji: "💎", rarity: "common" },
+  { type: "gems",   value: 15,  label: "15 Гемів",      emoji: "💎", rarity: "rare"   },
+  { type: "shield", value: 1,   label: "Streak Shield", emoji: "🛡️", rarity: "rare"   },
+  { type: "xp",     value: 30,  label: "30 XP",         emoji: "✨", rarity: "common" },
+  { type: "gems",   value: 3,   label: "3 Гемі",        emoji: "💎", rarity: "common" },
+];
+
+export async function getTodayMysteryBox(studentId: string): Promise<MysteryReward | null> {
+  const today = new Date().toISOString().split("T")[0];
+  const { data } = await supabase
+    .from("mystery_box_claims")
+    .select("*")
+    .eq("student_id", studentId)
+    .eq("date", today)
+    .single();
+  if (!data) return null;
+  return {
+    type: data.reward_type,
+    value: data.reward_value,
+    label: data.reward_label || data.reward_type,
+    emoji: data.reward_type === "shield" ? "🛡️" : data.reward_type === "gems" ? "💎" : "✨",
+    rarity: data.reward_value >= 200 ? "epic" : data.reward_value >= 100 ? "rare" : "common",
+  };
+}
+
+export async function claimMysteryBox(studentId: string): Promise<MysteryReward> {
+  const today = new Date().toISOString().split("T")[0];
+
+  // Weighted random
+  const weights = MYSTERY_REWARDS.map(r => r.rarity === "epic" ? 5 : r.rarity === "rare" ? 20 : 40);
+  const total = weights.reduce((a, b) => a + b, 0);
+  let rand = Math.random() * total;
+  let reward = MYSTERY_REWARDS[0];
+  for (let i = 0; i < MYSTERY_REWARDS.length; i++) {
+    rand -= weights[i];
+    if (rand <= 0) { reward = MYSTERY_REWARDS[i]; break; }
+  }
+
+  // Save claim
+  await supabase.from("mystery_box_claims").upsert({
+    student_id: studentId,
+    date: today,
+    reward_type: reward.type,
+    reward_value: reward.value,
+    reward_label: reward.label,
+  }, { onConflict: "student_id,date" });
+
+  // Apply reward
+  const { data: student } = await supabase
+    .from("students")
+    .select("xp, level, gems, streak_shields")
+    .eq("id", studentId)
+    .single();
+
+  if (student) {
+    const updates: Record<string, number> = {};
+    if (reward.type === "xp")     { updates.xp = (student.xp || 0) + reward.value; updates.level = Math.floor(updates.xp / 100) + 1; }
+    if (reward.type === "gems")   { updates.gems = (student.gems || 0) + reward.value; }
+    if (reward.type === "shield") { updates.streak_shields = Math.min((student.streak_shields || 0) + 1, 3); }
+    if (Object.keys(updates).length) {
+      await supabase.from("students").update(updates).eq("id", studentId);
+    }
+  }
+
+  return reward;
+}
+
+// ─── Night Challenge ──────────────────────────────────────────────────────────
+
+export function isNightTime(): boolean {
+  const hour = new Date().getHours();
+  return hour >= 21 && hour <= 23;
+}
+
+export async function getTodayNightChallenge(studentId: string): Promise<{ attempted: boolean; won: boolean | null; xpEarned: number }> {
+  const today = new Date().toISOString().split("T")[0];
+  const { data } = await supabase
+    .from("night_challenge_attempts")
+    .select("won, xp_earned")
+    .eq("student_id", studentId)
+    .eq("date", today)
+    .single();
+  if (!data) return { attempted: false, won: null, xpEarned: 0 };
+  return { attempted: true, won: data.won, xpEarned: data.xp_earned };
+}
+
+export async function saveNightChallengeResult(studentId: string, questionId: string, won: boolean): Promise<number> {
+  const today = new Date().toISOString().split("T")[0];
+  const xpEarned = won ? 150 : 30;
+
+  await supabase.from("night_challenge_attempts").upsert({
+    student_id: studentId,
+    date: today,
+    question_id: questionId,
+    won,
+    xp_earned: xpEarned,
+  }, { onConflict: "student_id,date" });
+
+  if (won) {
+    const { data: s } = await supabase.from("students").select("xp, level, gems").eq("id", studentId).single();
+    if (s) {
+      const newXp = (s.xp || 0) + xpEarned;
+      await supabase.from("students").update({
+        xp: newXp,
+        level: Math.floor(newXp / 100) + 1,
+        gems: (s.gems || 0) + 5,
+      }).eq("id", studentId);
+    }
+  }
+
+  return xpEarned;
+}
+
 // ─── Weekly XP Reset ─────────────────────────────────────────────────────────
 
 export async function checkWeeklyReset(studentId: string): Promise<void> {

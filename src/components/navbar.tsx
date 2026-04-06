@@ -31,6 +31,7 @@ export function Navbar() {
         <div className="flex items-center gap-3">
           {user ? (
             <>
+              <Link href="/test" className="text-sm text-gordemy-muted hover:text-gordemy-blue transition-colors" title="Mini Test">🧪</Link>
               <Link href="/boss" className="text-sm text-gordemy-muted hover:text-gordemy-orange transition-colors" title="Boss Fight Day">⚔️</Link>
               <Link href="/leaderboard" className="text-sm text-gordemy-muted hover:text-white transition-colors" title="Рейтинг">🏆</Link>
               <Link href="/achievements" className="text-sm text-gordemy-muted hover:text-white transition-colors" title="Досягнення">🎖️</Link>

@@ -14,7 +14,8 @@ import Link from "next/link";
 import { getLeague, getStudentAchievements, getAllAchievements, type Achievement } from "@/lib/achievements";
 import {
   getYesterdayGhost, getTodayGhostProgress, getTodayBoss, getMyBossAttempt,
-  checkWeeklyReset, applyStreakShield,
+  checkWeeklyReset, applyStreakShield, getXPMultiplier, getPlayerTitle,
+  getTodayMysteryBox, claimMysteryBox, isNightTime, getTodayNightChallenge,
   type GhostSnapshot, type BossFight, type BossAttempt,
 } from "@/lib/gamification";
 import { supabase } from "@/lib/supabase";
@@ -238,6 +239,9 @@ export default function DashboardPage() {
   const [boss, setBoss] = useState<BossFight | null>(null);
   const [bossAttempt, setBossAttempt] = useState<BossAttempt | null>(null);
   const [shieldUsed, setShieldUsed] = useState(false);
+  const [mysteryBoxClaimed, setMysteryBoxClaimed] = useState<any>(null);
+  const [mysteryBoxOpening, setMysteryBoxOpening] = useState(false);
+  const [nightChallenge, setNightChallenge] = useState<{ attempted: boolean; won: boolean | null; xpEarned: number } | null>(null);
 
   useEffect(() => {
     if (authLoading) return;
@@ -265,7 +269,7 @@ export default function DashboardPage() {
 
     await generateDailyTasks(user!.id, s.subjects || []);
 
-    const [todayTasks, progress, earnedKeys, allAch, ghostY, ghostT, bossData] = await Promise.all([
+    const [todayTasks, progress, earnedKeys, allAch, ghostY, ghostT, bossData, mysteryData, nightData] = await Promise.all([
       getTodayTasks(user!.id),
       getSubjectProgress(user!.id),
       getStudentAchievements(user!.id),
@@ -273,6 +277,8 @@ export default function DashboardPage() {
       getYesterdayGhost(user!.id),
       getTodayGhostProgress(user!.id),
       getTodayBoss(),
+      getTodayMysteryBox(user!.id),
+      getTodayNightChallenge(user!.id),
     ]);
 
     setTasks(todayTasks);
@@ -280,6 +286,8 @@ export default function DashboardPage() {
     setGhost(ghostY);
     setTodayGhost(ghostT);
     setBoss(bossData);
+    setMysteryBoxClaimed(mysteryData);
+    setNightChallenge(nightData);
 
     if (bossData) {
       const attempt = await getMyBossAttempt(user!.id, bossData.id);
@@ -309,6 +317,17 @@ export default function DashboardPage() {
     }
   };
 
+  const handleOpenMysteryBox = async () => {
+    if (!user || mysteryBoxOpening || mysteryBoxClaimed) return;
+    setMysteryBoxOpening(true);
+    const reward = await claimMysteryBox(user.id);
+    setMysteryBoxClaimed(reward);
+    setMysteryBoxOpening(false);
+    // Update student gems/xp
+    const { data: fresh } = await supabase.from("students").select("xp, level, gems, streak_shields").eq("id", user.id).single();
+    if (fresh) setStudent((prev: any) => ({ ...prev, ...fresh }));
+  };
+
   if (authLoading || loading) return <DashboardSkeleton />;
   if (!student) return null;
 
@@ -319,6 +338,10 @@ export default function DashboardPage() {
   const xpForNextLevel = (student.level || 1) * 100;
   const xpProgress = Math.min(100, Math.round(((student.xp || 0) % 100)));
   const banner = getMotivationalBanner(student, completedCount, totalTasks);
+  const xpMult = getXPMultiplier();
+  const playerTitle = getPlayerTitle(student.level || 1, student.total_tasks_completed || 0, student.streak || 0);
+  const allTasksDone = completedCount === totalTasks && totalTasks > 0;
+  const nightActive = isNightTime();
 
   return (
     <div className="max-w-[640px] mx-auto px-6 py-8">
@@ -336,9 +359,10 @@ export default function DashboardPage() {
       {/* Greeting + Gems */}
       <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mb-6 flex items-start justify-between">
         <div>
-          <h1 className="text-2xl font-extrabold mb-1">
-            Привіт, {student.name || "учень"}! 👋
-          </h1>
+          <div className="flex items-center gap-2 mb-1">
+            <h1 className="text-2xl font-extrabold">Привіт, {student.name || "учень"}! 👋</h1>
+          </div>
+          <div className={`text-sm font-bold mb-1 ${playerTitle.color}`}>{playerTitle.title}</div>
           <p className="text-gordemy-muted text-sm">
             {completedCount === totalTasks && totalTasks > 0
               ? "Всі завдання виконано! Відпочинь або тренуйся далі."
@@ -422,6 +446,71 @@ export default function DashboardPage() {
           {xpForNextLevel - (student.xp || 0)} XP до наступного рівня
         </p>
       </motion.div>
+
+      {/* ── XP MULTIPLIER BANNER ──────────────────────── */}
+      {xpMult.active && (
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.17 }}
+          className="mb-4 border border-gordemy-orange/30 rounded-xl bg-gordemy-orange/10 px-4 py-3 flex items-center gap-3">
+          <span className="text-2xl">{xpMult.emoji}</span>
+          <div className="flex-1">
+            <div className="text-white font-bold text-sm">{xpMult.label} активний!</div>
+            <div className="text-gordemy-muted text-xs">x{xpMult.multiplier} XP за кожну відповідь зараз</div>
+          </div>
+          <span className="text-gordemy-orange font-black text-lg">x{xpMult.multiplier}</span>
+        </motion.div>
+      )}
+
+      {/* ── MYSTERY BOX ────────────────────────────────── */}
+      {allTasksDone && (
+        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: 0.19 }}
+          className="mb-4">
+          {!mysteryBoxClaimed ? (
+            <button onClick={handleOpenMysteryBox} disabled={mysteryBoxOpening}
+              className="w-full border border-gordemy-purple/40 rounded-xl bg-gradient-to-r from-gordemy-purple/20 to-gordemy-blue/10 p-4 text-center group hover:border-gordemy-purple/60 transition-all">
+              <motion.div animate={{ rotate: mysteryBoxOpening ? 360 : 0, scale: mysteryBoxOpening ? [1, 1.2, 1] : 1 }}
+                transition={{ duration: 0.8, repeat: mysteryBoxOpening ? Infinity : 0 }}
+                className="text-4xl mb-2">🎁</motion.div>
+              <div className="text-white font-bold">Mystery Box</div>
+              <div className="text-gordemy-muted text-xs mt-1">
+                {mysteryBoxOpening ? "Відкриваємо..." : "Всі завдання виконано! Відкрий свій приз 🎉"}
+              </div>
+            </button>
+          ) : (
+            <div className="border border-gordemy-green/30 rounded-xl bg-gordemy-green/10 p-4 text-center">
+              <div className="text-3xl mb-2">{mysteryBoxClaimed.emoji || "✨"}</div>
+              <div className="text-gordemy-green font-bold">Отримано: {mysteryBoxClaimed.label}!</div>
+              <div className="text-gordemy-muted text-xs mt-1">Mystery Box відкрито сьогодні</div>
+            </div>
+          )}
+        </motion.div>
+      )}
+
+      {/* ── NIGHT CHALLENGE ────────────────────────────── */}
+      {nightActive && (
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.21 }}
+          className="mb-4">
+          {nightChallenge?.attempted ? (
+            <div className={`border rounded-xl p-4 flex items-center gap-3 ${nightChallenge.won ? "border-gordemy-green/30 bg-gordemy-green/5" : "border-gordemy-muted/20 bg-gordemy-card"}`}>
+              <span className="text-2xl">🌙</span>
+              <div>
+                <div className="text-sm font-bold text-white">Нічний виклик пройдено</div>
+                <div className="text-xs text-gordemy-muted">{nightChallenge.won ? `+${nightChallenge.xpEarned} XP + 💎 5 гемів` : "Повернись завтра вночі!"}</div>
+              </div>
+            </div>
+          ) : (
+            <Link href="/boss?night=1">
+              <div className="border border-gordemy-purple/40 rounded-xl bg-gordemy-purple/10 p-4 flex items-center gap-3 hover:border-gordemy-purple/60 transition-all cursor-pointer group">
+                <motion.span animate={{ opacity: [1, 0.5, 1] }} transition={{ duration: 2, repeat: Infinity }} className="text-2xl">🌙</motion.span>
+                <div className="flex-1">
+                  <div className="text-sm font-bold text-white">Нічний виклик</div>
+                  <div className="text-xs text-gordemy-muted">Одне hard питання • +150 XP + 💎 5 гемів</div>
+                </div>
+                <span className="text-gordemy-purple font-bold group-hover:translate-x-1 transition-transform">→</span>
+              </div>
+            </Link>
+          )}
+        </motion.div>
+      )}
 
       {/* ── BOSS FIGHT CARD ─────────────────────────────── */}
       {boss && (
