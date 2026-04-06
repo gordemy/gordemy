@@ -225,6 +225,29 @@ export default function DashboardPage() {
         </p>
       </motion.div>
 
+      {/* Game Mode Banner */}
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.18 }}
+        className="mb-6"
+      >
+        <Link href="/game">
+          <div className="relative overflow-hidden bg-gradient-to-r from-gordemy-blue/20 via-gordemy-purple/20 to-gordemy-blue/20 border border-gordemy-blue/30 rounded-2xl p-5 hover:border-gordemy-blue/60 transition-all group cursor-pointer">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <span className="text-4xl">⚔️</span>
+                <div>
+                  <p className="text-sm font-extrabold text-white">Game Mode</p>
+                  <p className="text-xs text-gordemy-muted mt-0.5">Бийся проти НМТ-бота та заробляй XP</p>
+                </div>
+              </div>
+              <span className="text-gordemy-blue font-bold text-lg group-hover:translate-x-1 transition-transform">→</span>
+            </div>
+          </div>
+        </Link>
+      </motion.div>
+
       {/* Today Progress + Refresh */}
       <motion.div
         initial={{ opacity: 0, y: 10 }}
