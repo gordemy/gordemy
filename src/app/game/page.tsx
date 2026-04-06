@@ -305,8 +305,8 @@ function SelectScreen({ skins, loading, onSelect }: {
       >
         <p className="text-xs font-bold text-gordemy-muted mb-3 tracking-wider">ЯК ГРАТИ</p>
         <div className="grid grid-cols-2 gap-2 text-xs text-gordemy-muted">
-          <div className="flex items-center gap-2"><span className="text-gordemy-green">✅</span> Правильна → ти б'єш бота</div>
-          <div className="flex items-center gap-2"><span className="text-red-400">❌</span> Неправильна → бот б'є тебе</div>
+          <div className="flex items-center gap-2"><span className="text-gordemy-green">✅</span> Правильна → ти атакуєш бота</div>
+          <div className="flex items-center gap-2"><span className="text-red-400">❌</span> Неправильна → бот атакує тебе</div>
           <div className="flex items-center gap-2"><span className="text-gordemy-purple">🔥</span> Combo → x2, x3 XP</div>
           <div className="flex items-center gap-2"><span className="text-gordemy-orange">🏆</span> Знищи бота або виживи</div>
         </div>
