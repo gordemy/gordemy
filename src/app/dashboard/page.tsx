@@ -14,7 +14,7 @@ import Link from "next/link";
 import { getLeague, getStudentAchievements, getAllAchievements, type Achievement } from "@/lib/achievements";
 import {
   getYesterdayGhost, getTodayGhostProgress, getTodayBoss, getMyBossAttempt,
-  checkWeeklyReset, useStreakShield,
+  checkWeeklyReset, applyStreakShield,
   type GhostSnapshot, type BossFight, type BossAttempt,
 } from "@/lib/gamification";
 import { supabase } from "@/lib/supabase";
@@ -243,6 +243,7 @@ export default function DashboardPage() {
     if (authLoading) return;
     if (!user) { router.push("/login"); return; }
     loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, authLoading, router]);
 
   async function loadData() {
@@ -301,7 +302,7 @@ export default function DashboardPage() {
 
   const handleUseShield = async () => {
     if (!user || shieldUsed) return;
-    const ok = await useStreakShield(user.id);
+    const ok = await applyStreakShield(user.id);
     if (ok) {
       setStudent((prev: any) => ({ ...prev, streak_shields: (prev.streak_shields || 1) - 1 }));
       setShieldUsed(true);

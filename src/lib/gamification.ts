@@ -213,7 +213,7 @@ export async function saveBossAttempt(
 
 // ─── Streak Shield ───────────────────────────────────────────────────────────
 
-export async function useStreakShield(studentId: string): Promise<boolean> {
+export async function applyStreakShield(studentId: string): Promise<boolean> {
   const today = new Date().toISOString().split("T")[0];
 
   const { data: student } = await supabase

@@ -67,6 +67,7 @@ export default function BossPage() {
     if (authLoading) return;
     if (!user) { router.push("/login"); return; }
     init();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, authLoading]);
 
   async function init() {
