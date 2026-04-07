@@ -7,15 +7,15 @@ import { GlowButton } from "./ui/glow-button";
 import { useAuth } from "@/lib/auth-context";
 
 const NAV_ITEMS = [
-  { href: "/test",        icon: "🧪", title: "Mini Test",         color: "hover:text-gordemy-blue"   },
-  { href: "/card-battle", icon: "🃏", title: "Card Battle",       color: "hover:text-gordemy-purple" },
-  { href: "/boss",        icon: "👹", title: "Daily Boss",        color: "hover:text-gordemy-orange" },
-  { href: "/duel",        icon: "⚔️", title: "1v1 Дуелі",         color: "hover:text-red-400"        },
-  { href: "/clan",        icon: "🏘️", title: "Клан",              color: "hover:text-gordemy-green"  },
-  { href: "/weakspot",    icon: "🎯", title: "Слабкі місця",       color: "hover:text-gordemy-blue"   },
-  { href: "/leaderboard", icon: "🏆", title: "Рейтинг",           color: "hover:text-gordemy-orange" },
-  { href: "/achievements",icon: "🎖️", title: "Досягнення",        color: "hover:text-white"          },
-  { href: "/avatar",      icon: "🎨", title: "Мій Герой",         color: "hover:text-gordemy-purple" },
+  { href: "/boss",              icon: "👹", title: "Денний Бос",      color: "hover:text-red-400"        },
+  { href: "/boss?mode=weekly",  icon: "🐉", title: "Тижневий Бос",    color: "hover:text-orange-400"     },
+  { href: "/ghost",             icon: "👻", title: "Битва з Собою",   color: "hover:text-cyan-400"       },
+  { href: "/duel",              icon: "⚔️", title: "1v1 Дуелі",       color: "hover:text-gordemy-purple" },
+  { href: "/card-battle",       icon: "🃏", title: "Card Battle",     color: "hover:text-gordemy-blue"   },
+  { href: "/weakspot",          icon: "🎯", title: "Слабкі місця",     color: "hover:text-gordemy-green"  },
+  { href: "/leaderboard",       icon: "🏆", title: "Рейтинг",         color: "hover:text-gordemy-orange" },
+  { href: "/achievements",      icon: "🎖️", title: "Досягнення",      color: "hover:text-white"          },
+  { href: "/avatar",            icon: "🎨", title: "Мій Герой",       color: "hover:text-gordemy-purple" },
 ];
 
 export function Navbar() {
