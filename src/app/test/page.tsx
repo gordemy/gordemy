@@ -7,6 +7,7 @@ import { useAuth } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase";
 import { getStudent } from "@/lib/student";
 import { getXPMultiplier, getSpeedBonus } from "@/lib/gamification";
+import { ChestPopup, rollChest, type ChestTier } from "@/components/chest-popup";
 import Link from "next/link";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -45,6 +46,7 @@ export default function TestPage() {
   const [timeLeft, setTimeLeft] = useState(TIME_PER_QUESTION);
   const [totalXP, setTotalXP] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [chest, setChest] = useState<ChestTier | null>(null);
 
   const startTimeRef = useRef<number>(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -139,6 +141,11 @@ export default function TestPage() {
           }
         });
       }
+      // Roll for chest
+      const newAnswers = [...answers, { correct: false, speedBonus: 0 }]; // last answer already appended
+      const correctCount = answers.filter(a => a.correct).length;
+      const chestTier = rollChest(correctCount, QUESTIONS_COUNT);
+      if (chestTier) setChest(chestTier);
       setPhase("result");
     } else {
       setCurrentQ(p => p + 1);
@@ -293,6 +300,13 @@ export default function TestPage() {
           </AnimatePresence>
         </div>
       )}
+
+      {/* Chest popup */}
+      <AnimatePresence>
+        {chest && phase === "result" && user && (
+          <ChestPopup tier={chest} userId={user.id} onClose={() => setChest(null)} />
+        )}
+      </AnimatePresence>
 
       {/* RESULT */}
       {phase === "result" && (

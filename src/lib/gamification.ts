@@ -1,5 +1,120 @@
 import { supabase } from "./supabase";
 
+// ─── Combo System ─────────────────────────────────────────────────────────────
+
+export interface ComboState {
+  count: number;
+  multiplier: number;
+  label: string;
+  color: string;
+  emoji: string;
+}
+
+export function getComboState(correctStreak: number): ComboState {
+  if (correctStreak >= 10) return { count: correctStreak, multiplier: 3.0, label: "LEGENDARY",  color: "text-gordemy-orange", emoji: "🔱" };
+  if (correctStreak >= 7)  return { count: correctStreak, multiplier: 2.5, label: "INSANE",     color: "text-gordemy-purple", emoji: "💥" };
+  if (correctStreak >= 5)  return { count: correctStreak, multiplier: 2.0, label: "UNSTOPPABLE",color: "text-gordemy-blue",   emoji: "🚀" };
+  if (correctStreak >= 3)  return { count: correctStreak, multiplier: 1.5, label: "ON FIRE",    color: "text-gordemy-orange", emoji: "🔥" };
+  if (correctStreak >= 2)  return { count: correctStreak, multiplier: 1.25,label: "COMBO",      color: "text-gordemy-green",  emoji: "⚡" };
+  return                         { count: correctStreak, multiplier: 1.0, label: "",            color: "text-gordemy-muted",  emoji: "" };
+}
+
+// ─── Daily Quest ──────────────────────────────────────────────────────────────
+
+export interface DailyQuest {
+  id: string;
+  label: string;
+  description: string;
+  target: number;
+  current: number;
+  xpReward: number;
+  gemReward: number;
+  emoji: string;
+  completed: boolean;
+}
+
+export async function getDailyQuests(studentId: string): Promise<DailyQuest[]> {
+  const today = new Date().toISOString().split("T")[0];
+
+  const { data: tasks } = await supabase
+    .from("tasks")
+    .select("completed, is_correct, subject")
+    .eq("student_id", studentId)
+    .eq("date", today);
+
+  const { data: stu } = await supabase
+    .from("students")
+    .select("streak, daily_quest_claimed")
+    .eq("id", studentId)
+    .single();
+
+  const completedToday = (tasks || []).filter((t: any) => t.completed).length;
+  const correctToday = (tasks || []).filter((t: any) => t.is_correct).length;
+
+  // Check mystery box
+  const { data: mb } = await supabase
+    .from("mystery_box_claims")
+    .select("id")
+    .eq("student_id", studentId)
+    .eq("date", today)
+    .single();
+
+  const claimedIds: string[] = stu?.daily_quest_claimed
+    ? (typeof stu.daily_quest_claimed === "string" ? JSON.parse(stu.daily_quest_claimed) : stu.daily_quest_claimed)
+    : [];
+
+  return [
+    {
+      id: "tasks_5",
+      label: "Зробити 5 завдань",
+      description: "Виконай 5 завдань сьогодні",
+      target: 5,
+      current: Math.min(completedToday, 5),
+      xpReward: 50,
+      gemReward: 5,
+      emoji: "📋",
+      completed: claimedIds.includes("tasks_5") || completedToday >= 5,
+    },
+    {
+      id: "correct_3",
+      label: "3 правильних підряд",
+      description: "Дай 3 правильні відповіді",
+      target: 3,
+      current: Math.min(correctToday, 3),
+      xpReward: 30,
+      gemReward: 3,
+      emoji: "🎯",
+      completed: claimedIds.includes("correct_3") || correctToday >= 3,
+    },
+    {
+      id: "mystery_box",
+      label: "Відкрити Mystery Box",
+      description: "Відкрий щоденний сюрприз",
+      target: 1,
+      current: mb ? 1 : 0,
+      xpReward: 20,
+      gemReward: 2,
+      emoji: "🎲",
+      completed: claimedIds.includes("mystery_box") || !!mb,
+    },
+  ];
+}
+
+// ─── First Blood ──────────────────────────────────────────────────────────────
+
+export async function checkFirstBlood(studentId: string): Promise<boolean> {
+  const today = new Date().toISOString().split("T")[0];
+  const { data } = await supabase
+    .from("tasks")
+    .select("id")
+    .eq("student_id", studentId)
+    .eq("date", today)
+    .eq("completed", true)
+    .limit(1)
+    .single();
+  return !data; // true = this will be the first task today
+}
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface GhostSnapshot {
