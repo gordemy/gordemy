@@ -1,706 +1,699 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAuth } from "@/lib/auth-context";
 import {
-  getStudent, getTodayTasks, generateDailyTasks, refreshDailyTasks,
-  getSubjectProgress,
-  type Student, type Task, type Question, type SubjectProgress,
+  getStudent, getTodayTasks, generateDailyTasks,
+  type Student, type Task, type Question,
 } from "@/lib/student";
-import { DashboardSkeleton } from "@/components/ui/loading";
-import Link from "next/link";
-import { getLeague, getStudentAchievements, getAllAchievements, type Achievement } from "@/lib/achievements";
+import { getLeague } from "@/lib/achievements";
+import { getPlayerTitle, getXPMultiplier } from "@/lib/gamification";
 import {
-  getYesterdayGhost, getTodayGhostProgress, getTodayBoss, getMyBossAttempt,
-  checkWeeklyReset, applyStreakShield, getXPMultiplier, getPlayerTitle,
-  getTodayMysteryBox, claimMysteryBox, isNightTime, getTodayNightChallenge,
-  type GhostSnapshot, type BossFight, type BossAttempt,
-} from "@/lib/gamification";
+  CHARACTERS, HATS, ACCESSORIES, AURAS, FRAMES,
+  AURA_STYLES, FRAME_STYLES, DEFAULT_AVATAR,
+} from "@/lib/avatar";
 import { supabase } from "@/lib/supabase";
+import Link from "next/link";
+
+// ─── Types ──────────────────────────────────────────────────────────────────
+
+interface AvatarData {
+  character: string;
+  hat: string;
+  accessory: string;
+  aura: string;
+  frame: string;
+}
+
+interface ChestItem {
+  id: string;
+  tier: "common" | "rare" | "epic" | "legendary";
+  earnedAt: string;
+  unlockAt: string;
+  opened: boolean;
+}
 
 type TaskWithQuestion = Task & { question: Question | null };
 
-const subjectNames: Record<string, string> = {
-  ukr: "🇺🇦 Українська", math: "📐 Математика", hist: "📜 Історія",
-  eng: "🌍 Англійська", bio: "🧬 Біологія", phys: "⚡ Фізика",
-  chem: "🧪 Хімія", geo: "🗺️ Географія",
-};
+// ─── Constants ──────────────────────────────────────────────────────────────
 
-const subjectShort: Record<string, string> = {
-  ukr: "🇺🇦 Укр", math: "📐 Мат", hist: "📜 Іст",
-  eng: "🌍 Англ", bio: "🧬 Біо", phys: "⚡ Фіз",
-  chem: "🧪 Хім", geo: "🗺️ Гео",
-};
+const CHEST_CFG = {
+  common:    { emoji: "📦", label: "Звичайний",   color: "from-slate-600 to-slate-800",   border: "border-slate-500/60",  glow: "shadow-slate-500/20",  hours: 1  },
+  rare:      { emoji: "💠", label: "Рідкісний",   color: "from-blue-600 to-blue-900",     border: "border-blue-400/60",   glow: "shadow-blue-400/30",   hours: 4  },
+  epic:      { emoji: "🔮", label: "Епічний",     color: "from-purple-600 to-purple-900", border: "border-purple-400/60", glow: "shadow-purple-400/40", hours: 12 },
+  legendary: { emoji: "🌟", label: "Легендарний", color: "from-yellow-500 to-orange-700", border: "border-yellow-400/70", glow: "shadow-yellow-400/50", hours: 24 },
+} as const;
 
-const difficultyColors: Record<string, string> = {
-  easy: "text-gordemy-green bg-gordemy-green/10 border-gordemy-green/20",
-  medium: "text-gordemy-blue bg-gordemy-blue/10 border-gordemy-blue/20",
-  hard: "text-gordemy-orange bg-gordemy-orange/10 border-gordemy-orange/20",
-};
+const GAME_MODES = [
+  {
+    id: "boss-daily", emoji: "👹", label: "Денний Бос",
+    sub: "Битва кожного дня", href: "/boss",
+    grad: "from-red-900/40 to-red-950/60", border: "border-red-500/40",
+    badge: "DAILY", badgeColor: "bg-red-500",
+  },
+  {
+    id: "boss-weekly", emoji: "🐉", label: "Тижневий Бос",
+    sub: "Епічна битва тижня", href: "/boss?mode=weekly",
+    grad: "from-orange-900/40 to-amber-950/60", border: "border-orange-400/40",
+    badge: "WEEKLY", badgeColor: "bg-orange-500",
+  },
+  {
+    id: "ghost", emoji: "👻", label: "Битва з Собою",
+    sub: "Переможи вчорашнього себе", href: "/ghost",
+    grad: "from-cyan-900/40 to-sky-950/60", border: "border-cyan-400/40",
+    badge: "NEW", badgeColor: "bg-cyan-500",
+  },
+  {
+    id: "duel", emoji: "⚔️", label: "Дуель",
+    sub: "1v1 з живим гравцем", href: "/duel",
+    grad: "from-violet-900/40 to-purple-950/60", border: "border-violet-400/40",
+    badge: null, badgeColor: "",
+  },
+  {
+    id: "card", emoji: "🃏", label: "Карти",
+    sub: "Швидка карткова гра", href: "/card-battle",
+    grad: "from-green-900/40 to-emerald-950/60", border: "border-green-400/40",
+    badge: null, badgeColor: "",
+  },
+  {
+    id: "weakspot", emoji: "🎯", label: "Слабкі місця",
+    sub: "AI знаходить прогалини", href: "/weakspot",
+    grad: "from-pink-900/40 to-rose-950/60", border: "border-pink-400/40",
+    badge: "AI", badgeColor: "bg-pink-500",
+  },
+];
 
-function getMotivationalBanner(student: Student & { streak_shields?: number }, completedCount: number, totalTasks: number) {
-  const hour = new Date().getHours();
-  const streak = student.streak || 0;
-  const level = student.level || 1;
+// ─── Helpers ────────────────────────────────────────────────────────────────
 
-  if (completedCount === totalTasks && totalTasks > 0) {
-    return { emoji: "🏆", text: "Всі завдання виконано! Ти — чемпіон сьогодні!", color: "from-gordemy-green/20 to-gordemy-green/5 border-gordemy-green/30" };
-  }
-  if (streak >= 7) {
-    return { emoji: "🔥", text: `${streak} днів поспіль! Ти невпинний. Не зупиняйся!`, color: "from-gordemy-orange/20 to-gordemy-orange/5 border-gordemy-orange/30" };
-  }
-  if (streak >= 3) {
-    return { emoji: "⚡", text: `${streak}-денний стрік! Так тримати — ти в потоці!`, color: "from-gordemy-purple/20 to-gordemy-purple/5 border-gordemy-purple/30" };
-  }
-  if (level >= 5) {
-    return { emoji: "⭐", text: `Рівень ${level}! Ти вже досвідчений гравець Gordemy.`, color: "from-gordemy-orange/20 to-gordemy-orange/5 border-gordemy-orange/30" };
-  }
-  if (hour < 12) {
-    return { emoji: "🌅", text: "Ранок — кращий час для навчання. Вперед до НМТ!", color: "from-gordemy-blue/20 to-gordemy-blue/5 border-gordemy-blue/30" };
-  }
-  if (hour >= 21) {
-    return { emoji: "🌙", text: "Вечірнє завдання — це +1 до твого майбутнього балу.", color: "from-gordemy-purple/20 to-gordemy-purple/5 border-gordemy-purple/30" };
-  }
-  return { emoji: "🎯", text: `Привіт, ${student.name}! ${totalTasks - completedCount} завдань чекають. Поїхали!`, color: "from-gordemy-blue/20 to-gordemy-blue/5 border-gordemy-blue/30" };
+function formatTimer(unlockAt: string): string {
+  const diff = new Date(unlockAt).getTime() - Date.now();
+  if (diff <= 0) return "ГОТОВО";
+  const h = Math.floor(diff / 3600000);
+  const m = Math.floor((diff % 3600000) / 60000);
+  const s = Math.floor((diff % 60000) / 1000);
+  if (h > 0) return `${h}г ${m}хв`;
+  if (m > 0) return `${m}хв ${s}с`;
+  return `${s}с`;
 }
 
-// ─── Ghost Race Widget ──────────────────────────────────────────────────────
+function isReady(unlockAt: string) {
+  return new Date(unlockAt).getTime() <= Date.now();
+}
 
-function GhostRaceWidget({ ghost, today, completedToday }: {
-  ghost: GhostSnapshot | null;
-  today: GhostSnapshot | null;
-  completedToday: number;
+function isWeeklyBossDay() {
+  return new Date().getDay() === 1; // Monday
+}
+
+function getStreakMultiplier(streak: number) {
+  if (streak >= 14) return { label: "×3 XP", color: "text-red-400" };
+  if (streak >= 7)  return { label: "×2 XP", color: "text-orange-400" };
+  if (streak >= 3)  return { label: "×1.5 XP", color: "text-yellow-400" };
+  return { label: "×1 XP", color: "text-gordemy-muted" };
+}
+
+// ─── CharacterStage ──────────────────────────────────────────────────────────
+
+function CharacterStage({ avatar, student, title }: {
+  avatar: AvatarData;
+  student: Student & { gems?: number; streak?: number; level?: number; xp?: number };
+  title: { title: string; color: string };
 }) {
-  if (!ghost) {
-    return (
-      <div className="border border-dashed border-gordemy-border rounded-xl p-4 text-center">
-        <div className="text-2xl mb-1">👻</div>
-        <p className="text-gordemy-muted text-xs">Ghost Race активується завтра<br />після першого дня навчання</p>
-      </div>
-    );
-  }
+  const char  = CHARACTERS.find(c => c.id === avatar.character) || CHARACTERS[0];
+  const hat   = HATS.find(h => h.id === avatar.hat);
+  const acc   = ACCESSORIES.find(a => a.id === avatar.accessory);
+  const auraStyle  = AURA_STYLES[avatar.aura as keyof typeof AURA_STYLES]  ?? "";
+  const frameStyle = FRAME_STYLES[avatar.frame as keyof typeof FRAME_STYLES] ?? "border-gordemy-border";
 
-  const todayXP = today?.xp_earned || 0;
-  const ghostXP = ghost.xp_earned || 0;
-  const todayTasks = today?.tasks_completed || completedToday;
-  const ghostTasks = ghost.tasks_completed || 0;
-  const winning = todayXP >= ghostXP;
-  const diff = Math.abs(todayXP - ghostXP);
+  const xpProgress = Math.min(100, (student.xp || 0) % 100);
+  const streak = student.streak || 0;
+  const mult = getStreakMultiplier(streak);
+  const league = getLeague(student.xp || 0);
 
   return (
-    <div className={`border rounded-xl p-4 ${winning ? "border-gordemy-green/30 bg-gordemy-green/5" : "border-gordemy-orange/30 bg-gordemy-orange/5"}`}>
-      <div className="flex items-center gap-2 mb-3">
-        <span className="text-lg">👻</span>
-        <span className="text-sm font-bold text-white">Ghost Race</span>
-        <span className={`ml-auto text-xs font-bold px-2 py-0.5 rounded-full ${winning ? "bg-gordemy-green/20 text-gordemy-green" : "bg-gordemy-orange/20 text-gordemy-orange"}`}>
-          {winning ? "✅ Ти попереду!" : "⚡ Жени!"}
+    <div className="relative flex flex-col items-center pt-6 pb-4">
+      {/* Radial glow */}
+      <div className="absolute top-8 left-1/2 -translate-x-1/2 w-48 h-48 rounded-full blur-3xl opacity-30 bg-gordemy-purple pointer-events-none" />
+
+      {/* Top row: streak | gems | league */}
+      <div className="w-full flex items-center justify-between px-2 mb-6 z-10">
+        {/* Streak */}
+        <motion.div
+          whileTap={{ scale: 0.9 }}
+          className="flex items-center gap-1.5 bg-gordemy-card border border-gordemy-border rounded-2xl px-3 py-2"
+        >
+          <motion.span
+            animate={{ scale: streak > 0 ? [1, 1.2, 1] : 1 }}
+            transition={{ duration: 2, repeat: Infinity }}
+            className="text-xl"
+          >
+            🔥
+          </motion.span>
+          <div>
+            <div className="text-white font-extrabold text-sm leading-none">{streak}</div>
+            <div className={`text-[10px] font-bold ${mult.color}`}>{mult.label}</div>
+          </div>
+        </motion.div>
+
+        {/* Gems */}
+        <motion.div
+          whileTap={{ scale: 0.9 }}
+          className="flex items-center gap-1.5 bg-gordemy-card border border-gordemy-border rounded-2xl px-3 py-2"
+        >
+          <span className="text-xl">💎</span>
+          <span className="text-white font-extrabold text-sm">{student.gems || 0}</span>
+        </motion.div>
+
+        {/* League */}
+        <Link href="/leaderboard">
+          <motion.div
+            whileTap={{ scale: 0.9 }}
+            className={`flex items-center gap-1.5 rounded-2xl px-3 py-2 border ${league.bg}`}
+          >
+            <span className="text-xl">{league.icon}</span>
+            <span className={`font-extrabold text-sm ${league.color}`}>{league.name}</span>
+          </motion.div>
+        </Link>
+      </div>
+
+      {/* Character */}
+      <motion.div
+        animate={{ y: [0, -10, 0] }}
+        transition={{ duration: 3.5, repeat: Infinity, ease: "easeInOut" }}
+        className="relative z-10 mb-4"
+      >
+        <div className={`relative w-36 h-36 rounded-full flex items-center justify-center border-4 ${frameStyle} ${auraStyle} shadow-2xl`}>
+          <span className="text-8xl select-none">{char.emoji}</span>
+          {hat && hat.id !== "none" && (
+            <span className="absolute -top-5 right-0 text-4xl drop-shadow-lg">{hat.emoji}</span>
+          )}
+          {acc && acc.id !== "none" && (
+            <span className="absolute -bottom-2 -right-3 text-3xl drop-shadow-lg">{acc.emoji}</span>
+          )}
+          {/* Level ring */}
+          <div className="absolute -bottom-4 left-1/2 -translate-x-1/2 bg-gradient-to-r from-gordemy-purple to-gordemy-blue text-white text-xs font-black px-4 py-1 rounded-full shadow-lg border border-purple-400/40">
+            LVL {student.level || 1}
+          </div>
+        </div>
+      </motion.div>
+
+      {/* Name + Title */}
+      <div className="text-center z-10 mt-2">
+        <h1 className="text-lg font-extrabold text-white tracking-wide">{student.name || "Учень"}</h1>
+        <div className={`text-xs font-bold mt-0.5 ${title.color}`}>{title.title}</div>
+      </div>
+
+      {/* XP Bar */}
+      <div className="w-full max-w-xs mt-4 z-10">
+        <div className="flex justify-between text-[10px] text-gordemy-muted mb-1">
+          <span>XP до {student.level || 1 + 1} рівня</span>
+          <span>{xpProgress}/100</span>
+        </div>
+        <div className="h-2 rounded-full bg-gordemy-card border border-gordemy-border overflow-hidden">
+          <motion.div
+            initial={{ width: 0 }}
+            animate={{ width: `${xpProgress}%` }}
+            transition={{ duration: 1, ease: "easeOut" }}
+            className="h-full rounded-full bg-gradient-to-r from-gordemy-purple to-gordemy-blue"
+          />
+        </div>
+      </div>
+
+      {/* Avatar link */}
+      <Link href="/avatar" className="mt-3 z-10">
+        <motion.button
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.95 }}
+          className="text-xs text-gordemy-muted hover:text-gordemy-blue border border-gordemy-border hover:border-gordemy-blue/50 px-3 py-1 rounded-xl transition-all"
+        >
+          🎨 Змінити аватар
+        </motion.button>
+      </Link>
+    </div>
+  );
+}
+
+// ─── ChestInventory ──────────────────────────────────────────────────────────
+
+function ChestInventory({ chests, onOpen }: {
+  chests: ChestItem[];
+  onOpen: (id: string) => void;
+}) {
+  const [timers, setTimers] = useState<Record<string, string>>({});
+  const [opening, setOpening] = useState<string | null>(null);
+  const [reward, setReward] = useState<{ xp: number; gems: number } | null>(null);
+
+  useEffect(() => {
+    const update = () => {
+      const t: Record<string, string> = {};
+      chests.forEach(c => { t[c.id] = formatTimer(c.unlockAt); });
+      setTimers(t);
+    };
+    update();
+    const iv = setInterval(update, 1000);
+    return () => clearInterval(iv);
+  }, [chests]);
+
+  const handleOpen = async (chest: ChestItem) => {
+    if (!isReady(chest.unlockAt) || opening) return;
+    setOpening(chest.id);
+    const cfg = CHEST_CFG[chest.tier];
+    const xp   = Math.floor(Math.random() * (cfg.hours * 25 - cfg.hours * 10 + 1)) + cfg.hours * 10;
+    const gems = Math.floor(Math.random() * (cfg.hours * 6)) ;
+    setTimeout(() => {
+      setReward({ xp, gems });
+      onOpen(chest.id);
+      setTimeout(() => { setOpening(null); setReward(null); }, 2000);
+    }, 800);
+  };
+
+  const displayChests = [...chests, null, null, null].slice(0, Math.max(chests.length + 1, 3));
+
+  return (
+    <div className="mb-6">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-sm font-bold text-gordemy-muted uppercase tracking-widest">🎁 Інвентар сундуків</h2>
+        <span className="text-xs text-gordemy-muted">{chests.length} шт</span>
+      </div>
+
+      {/* Reward popup */}
+      <AnimatePresence>
+        {reward && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.5, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.5, y: -20 }}
+            className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none"
+          >
+            <div className="bg-gordemy-card border-2 border-yellow-400/60 rounded-3xl px-8 py-6 text-center shadow-2xl shadow-yellow-400/20">
+              <div className="text-5xl mb-3">🎉</div>
+              <div className="text-white font-black text-xl">+{reward.xp} XP</div>
+              {reward.gems > 0 && (
+                <div className="text-yellow-300 font-bold text-lg">+{reward.gems} 💎</div>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide">
+        {displayChests.map((chest, i) => {
+          if (!chest) {
+            return (
+              <div
+                key={`empty-${i}`}
+                className="flex-shrink-0 w-20 h-28 rounded-2xl border-2 border-dashed border-gordemy-border/40 flex flex-col items-center justify-center text-gordemy-muted/30 gap-1"
+              >
+                <span className="text-2xl">➕</span>
+                <span className="text-[9px]">Вільно</span>
+              </div>
+            );
+          }
+
+          const cfg = CHEST_CFG[chest.tier];
+          const ready = isReady(chest.unlockAt);
+          const isOpening = opening === chest.id;
+
+          return (
+            <motion.div
+              key={chest.id}
+              whileTap={{ scale: 0.92 }}
+              onClick={() => handleOpen(chest)}
+              className={`flex-shrink-0 w-20 h-28 rounded-2xl border-2 ${cfg.border} bg-gradient-to-b ${cfg.color} flex flex-col items-center justify-center gap-1 relative overflow-hidden cursor-pointer shadow-lg ${cfg.glow}`}
+            >
+              {ready && !isOpening && (
+                <motion.div
+                  animate={{ opacity: [0.2, 0.6, 0.2] }}
+                  transition={{ duration: 1.2, repeat: Infinity }}
+                  className="absolute inset-0 bg-white/15 rounded-2xl"
+                />
+              )}
+              <AnimatePresence mode="wait">
+                {isOpening ? (
+                  <motion.span
+                    key="opening"
+                    animate={{ rotate: [0, -15, 15, -10, 10, 0], scale: [1, 1.3, 1] }}
+                    transition={{ duration: 0.6 }}
+                    className="text-4xl"
+                  >
+                    {cfg.emoji}
+                  </motion.span>
+                ) : (
+                  <motion.span key="idle" className="text-4xl">{cfg.emoji}</motion.span>
+                )}
+              </AnimatePresence>
+              <span className="text-[9px] font-bold text-white/80 text-center leading-tight px-1">{cfg.label}</span>
+              <span className={`text-[9px] font-mono font-black ${ready ? "text-yellow-300" : "text-white/50"}`}>
+                {ready ? "ВІДКРИТИ!" : timers[chest.id] || "..."}
+              </span>
+            </motion.div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── DailyQuests ─────────────────────────────────────────────────────────────
+
+function DailyQuests({ tasks, onStart }: {
+  tasks: TaskWithQuestion[];
+  onStart: () => void;
+}) {
+  const completed = tasks.filter(t => t.completed).length;
+  const total = tasks.length;
+  const allDone = completed === total && total > 0;
+
+  return (
+    <div className="mb-6">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-sm font-bold text-gordemy-muted uppercase tracking-widest">📋 Денні квести</h2>
+        <span className={`text-xs font-bold ${allDone ? "text-gordemy-green" : "text-gordemy-muted"}`}>
+          {completed}/{total}
         </span>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
-        <div className="text-center">
-          <div className="text-xs text-gordemy-muted mb-1">Ти сьогодні</div>
-          <div className="text-gordemy-blue font-black text-xl">{todayXP} XP</div>
-          <div className="text-gordemy-muted text-xs">{todayTasks} задач</div>
-        </div>
-        <div className="text-center">
-          <div className="text-xs text-gordemy-muted mb-1">Ти вчора 👻</div>
-          <div className="text-gordemy-muted font-black text-xl">{ghostXP} XP</div>
-          <div className="text-gordemy-muted text-xs">{ghostTasks} задач</div>
-        </div>
+      {/* Progress bar */}
+      <div className="h-1.5 rounded-full bg-gordemy-card border border-gordemy-border mb-3 overflow-hidden">
+        <motion.div
+          animate={{ width: total > 0 ? `${(completed / total) * 100}%` : "0%" }}
+          transition={{ duration: 0.5 }}
+          className="h-full bg-gradient-to-r from-gordemy-green to-gordemy-blue rounded-full"
+        />
       </div>
 
-      {diff > 0 && (
-        <div className="mt-2 text-center text-xs text-gordemy-muted">
-          {winning ? `Ти попереду на ${diff} XP 🎉` : `Відставання ${diff} XP — наздожени призрака!`}
-        </div>
-      )}
-
-      {/* Progress bar comparison */}
-      <div className="mt-3 space-y-1.5">
-        <div className="flex items-center gap-2 text-xs">
-          <span className="w-12 text-gordemy-blue text-right">Ти</span>
-          <div className="flex-1 bg-gordemy-border rounded-full h-2 overflow-hidden">
-            <motion.div
-              className="h-full bg-gordemy-blue rounded-full"
-              initial={{ width: 0 }}
-              animate={{ width: `${ghostXP > 0 ? Math.min(100, (todayXP / Math.max(todayXP, ghostXP)) * 100) : 50}%` }}
-              transition={{ duration: 0.8 }}
-            />
+      <div className="space-y-2">
+        {tasks.length === 0 && (
+          <div className="text-center py-6 text-gordemy-muted text-sm">
+            Завдань ще немає. Зачекай трохи...
           </div>
-        </div>
-        <div className="flex items-center gap-2 text-xs">
-          <span className="w-12 text-gordemy-muted text-right">👻</span>
-          <div className="flex-1 bg-gordemy-border rounded-full h-2 overflow-hidden">
+        )}
+        {tasks.map((task, i) => {
+          const subjectEmojis: Record<string, string> = {
+            ukr: "🇺🇦", math: "📐", hist: "📜", eng: "🌍",
+            bio: "🧬", phys: "⚡", chem: "🧪", geo: "🗺️",
+          };
+          const emoji = subjectEmojis[task.subject] || "📚";
+          const diffColors: Record<string, string> = {
+            easy:   "text-gordemy-green  bg-gordemy-green/10  border-gordemy-green/30",
+            medium: "text-gordemy-blue   bg-gordemy-blue/10   border-gordemy-blue/30",
+            hard:   "text-gordemy-orange bg-gordemy-orange/10 border-gordemy-orange/30",
+          };
+          const diffLabels: Record<string, string> = { easy: "Легко", medium: "Середньо", hard: "Важко" };
+
+          return (
             <motion.div
-              className="h-full bg-gordemy-muted/50 rounded-full"
-              initial={{ width: 0 }}
-              animate={{ width: `${ghostXP > 0 ? Math.min(100, (ghostXP / Math.max(todayXP, ghostXP)) * 100) : 50}%` }}
-              transition={{ duration: 0.8, delay: 0.1 }}
-            />
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
+              key={task.id}
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: i * 0.08 }}
+              className={`flex items-center gap-3 p-3 rounded-2xl border transition-all ${
+                task.completed
+                  ? "bg-gordemy-green/5 border-gordemy-green/20 opacity-60"
+                  : "bg-gordemy-card border-gordemy-border"
+              }`}
+            >
+              {/* Checkbox */}
+              <div className={`w-7 h-7 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
+                task.completed ? "bg-gordemy-green border-gordemy-green" : "border-gordemy-border"
+              }`}>
+                {task.completed && <span className="text-xs">✓</span>}
+              </div>
 
-// ─── Boss Card Widget ────────────────────────────────────────────────────────
+              {/* Info */}
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-base">{emoji}</span>
+                  <span className="text-white text-sm font-semibold truncate">
+                    {task.question?.question_text?.slice(0, 45) || "Завдання"}...
+                  </span>
+                </div>
+                <div className={`inline-flex items-center text-[10px] font-bold px-2 py-0.5 rounded-full border mt-1 ${diffColors[task.difficulty] || diffColors.medium}`}>
+                  {diffLabels[task.difficulty] || task.difficulty}
+                </div>
+              </div>
 
-function BossCard({ boss, attempt }: { boss: BossFight | null; attempt: BossAttempt | null }) {
-  if (!boss) return null;
-
-  return (
-    <Link href="/boss">
-      <motion.div
-        whileHover={{ scale: 1.01 }}
-        whileTap={{ scale: 0.98 }}
-        className="relative overflow-hidden border border-gordemy-orange/40 rounded-xl bg-gradient-to-r from-red-900/20 to-gordemy-orange/10 p-4 cursor-pointer group"
-      >
-        {/* Animated glow */}
-        <div className="absolute inset-0 bg-gradient-to-r from-gordemy-orange/0 via-gordemy-orange/5 to-gordemy-orange/0 animate-pulse pointer-events-none" />
-
-        <div className="flex items-center gap-3">
-          <motion.span
-            animate={{ scale: [1, 1.1, 1] }}
-            transition={{ duration: 2, repeat: Infinity }}
-            className="text-3xl"
-          >
-            {boss.boss_emoji}
-          </motion.span>
-          <div className="flex-1">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold text-gordemy-orange uppercase tracking-wide">⚔️ Boss Fight Day</span>
-              {attempt ? (
-                <span className={`text-xs px-2 py-0.5 rounded-full font-bold ${attempt.won ? "bg-gordemy-green/20 text-gordemy-green" : "bg-red-500/20 text-red-400"}`}>
-                  {attempt.won ? "✅ Переміг" : "❌ Програв"}
-                </span>
-              ) : (
-                <span className="text-xs px-2 py-0.5 rounded-full bg-gordemy-orange/20 text-gordemy-orange font-bold animate-pulse">
-                  🔴 LIVE
-                </span>
+              {/* XP reward */}
+              {!task.completed && (
+                <div className="text-xs font-bold text-gordemy-purple flex-shrink-0">+{task.xp_reward || 10} XP</div>
               )}
-            </div>
-            <p className="text-white font-bold text-sm">{boss.boss_name}</p>
-            <p className="text-gordemy-muted text-xs">+{boss.xp_reward} XP за перемогу • 💎 10 гемів</p>
-          </div>
-          <span className="text-gordemy-orange font-bold text-lg group-hover:translate-x-1 transition-transform">→</span>
-        </div>
-      </motion.div>
-    </Link>
-  );
-}
-
-// ─── Streak Shield Widget ────────────────────────────────────────────────────
-
-function StreakShieldWidget({ shields, streak, onUse }: {
-  shields: number;
-  streak: number;
-  onUse: () => void;
-}) {
-  if (shields <= 0) return null;
-
-  return (
-    <div className="border border-gordemy-purple/30 rounded-xl bg-gordemy-purple/5 p-3 flex items-center gap-3">
-      <span className="text-2xl">🛡️</span>
-      <div className="flex-1">
-        <div className="text-sm font-bold text-white">Streak Shield ×{shields}</div>
-        <div className="text-xs text-gordemy-muted">Захищає стрік якщо пропустиш день</div>
+            </motion.div>
+          );
+        })}
       </div>
-      {streak > 0 && (
-        <button
-          onClick={onUse}
-          className="text-xs px-3 py-1.5 rounded-lg bg-gordemy-purple/20 border border-gordemy-purple/30 text-gordemy-purple hover:bg-gordemy-purple/30 transition-colors font-bold"
+
+      {/* Play button */}
+      {!allDone && tasks.length > 0 && (
+        <motion.button
+          whileHover={{ scale: 1.02 }}
+          whileTap={{ scale: 0.97 }}
+          onClick={onStart}
+          className="w-full mt-4 py-4 rounded-2xl bg-gradient-to-r from-gordemy-purple to-gordemy-blue text-white font-black text-base tracking-wide shadow-lg shadow-purple-500/30 relative overflow-hidden"
         >
-          Використати
-        </button>
+          <motion.div
+            animate={{ x: ["-100%", "100%"] }}
+            transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+            className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent"
+          />
+          ▶ ПОЧАТИ КВЕСТИ
+        </motion.button>
+      )}
+
+      {allDone && (
+        <motion.div
+          initial={{ scale: 0.8, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          className="w-full mt-4 py-4 rounded-2xl bg-gordemy-green/10 border border-gordemy-green/30 text-gordemy-green font-black text-base text-center"
+        >
+          🏆 Всі квести виконано!
+        </motion.div>
       )}
     </div>
   );
 }
 
-// ─── Main Dashboard ──────────────────────────────────────────────────────────
+// ─── GameModeGrid ────────────────────────────────────────────────────────────
+
+function GameModeGrid({ bossDaily, bossWeekly }: { bossDaily: boolean; bossWeekly: boolean }) {
+  return (
+    <div className="mb-6">
+      <h2 className="text-sm font-bold text-gordemy-muted uppercase tracking-widest mb-3">⚔️ Режими гри</h2>
+      <div className="grid grid-cols-2 gap-3">
+        {GAME_MODES.map((mode, i) => {
+          const isDailyBoss   = mode.id === "boss-daily"   && bossDaily;
+          const isWeeklyBoss  = mode.id === "boss-weekly"  && bossWeekly;
+          const done = isDailyBoss || isWeeklyBoss;
+
+          return (
+            <Link key={mode.id} href={mode.href}>
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.06 }}
+                whileHover={{ scale: 1.03 }}
+                whileTap={{ scale: 0.96 }}
+                className={`relative p-4 rounded-2xl border bg-gradient-to-br ${mode.grad} ${mode.border} shadow-md overflow-hidden ${done ? "opacity-50" : ""}`}
+              >
+                {/* Shimmer */}
+                {!done && (
+                  <motion.div
+                    animate={{ x: ["-100%", "200%"] }}
+                    transition={{ duration: 3, repeat: Infinity, delay: i * 0.5, ease: "linear" }}
+                    className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent pointer-events-none"
+                  />
+                )}
+
+                {/* Badge */}
+                {mode.badge && !done && (
+                  <span className={`absolute top-2 right-2 text-[9px] font-black text-white px-1.5 py-0.5 rounded-full ${mode.badgeColor}`}>
+                    {mode.badge}
+                  </span>
+                )}
+                {done && (
+                  <span className="absolute top-2 right-2 text-[9px] font-black text-gordemy-green border border-gordemy-green/40 px-1.5 py-0.5 rounded-full bg-gordemy-green/10">
+                    ✓ DONE
+                  </span>
+                )}
+
+                <div className="text-3xl mb-2">{mode.emoji}</div>
+                <div className="text-white font-extrabold text-sm leading-tight">{mode.label}</div>
+                <div className="text-gordemy-muted text-[11px] mt-0.5">{mode.sub}</div>
+              </motion.div>
+            </Link>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── Main Page ───────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
   const { user, loading: authLoading } = useAuth();
   const router = useRouter();
-  const [student, setStudent] = useState<any>(null);
-  const [tasks, setTasks] = useState<TaskWithQuestion[]>([]);
-  const [subjectProgress, setSubjectProgress] = useState<SubjectProgress[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [recentAchievements, setRecentAchievements] = useState<Achievement[]>([]);
 
-  // Gamification state
-  const [ghost, setGhost] = useState<GhostSnapshot | null>(null);
-  const [todayGhost, setTodayGhost] = useState<GhostSnapshot | null>(null);
-  const [boss, setBoss] = useState<BossFight | null>(null);
-  const [bossAttempt, setBossAttempt] = useState<BossAttempt | null>(null);
-  const [shieldUsed, setShieldUsed] = useState(false);
-  const [mysteryBoxClaimed, setMysteryBoxClaimed] = useState<any>(null);
-  const [mysteryBoxOpening, setMysteryBoxOpening] = useState(false);
-  const [nightChallenge, setNightChallenge] = useState<{ attempted: boolean; won: boolean | null; xpEarned: number } | null>(null);
+  const [student, setStudent] = useState<(Student & {
+    gems?: number; streak?: number; level?: number; xp?: number;
+    avatar_data?: AvatarData;
+    chest_inventory?: ChestItem[];
+    boss_daily_done?: boolean; boss_daily_reset?: string;
+    boss_weekly_done?: boolean; boss_weekly_reset?: string;
+  }) | null>(null);
+  const [tasks, setTasks]   = useState<TaskWithQuestion[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // Load everything
+  const load = useCallback(async () => {
+    if (!user) return;
+    setLoading(true);
+    try {
+      const [st, allTasks] = await Promise.all([
+        getStudent(user.id),
+        getTodayTasks(user.id),
+      ]);
+      if (!st) { router.replace("/onboarding"); return; }
+
+      // Generate if empty
+      let finalTasks = allTasks;
+      if (allTasks.length === 0) {
+        await generateDailyTasks(user.id, (st as any).subjects || ["ukr", "math"]);
+        finalTasks = await getTodayTasks(user.id);
+      }
+
+      // Limit to 3 quests
+      finalTasks = finalTasks.slice(0, 3);
+
+      // Reset daily boss if needed
+      const today = new Date().toISOString().split("T")[0];
+      const s = st as any;
+
+      if (s.boss_daily_reset !== today && s.boss_daily_done) {
+        await supabase.from("students").update({ boss_daily_done: false, boss_daily_reset: today }).eq("id", user.id);
+        s.boss_daily_done = false;
+      }
+
+      // Reset weekly boss on Monday
+      const monday = (() => {
+        const d = new Date(); d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+        return d.toISOString().split("T")[0];
+      })();
+      if (s.boss_weekly_reset !== monday && s.boss_weekly_done) {
+        await supabase.from("students").update({ boss_weekly_done: false, boss_weekly_reset: monday }).eq("id", user.id);
+        s.boss_weekly_done = false;
+      }
+
+      setStudent(s);
+      setTasks(finalTasks);
+    } finally {
+      setLoading(false);
+    }
+  }, [user, router]);
 
   useEffect(() => {
-    if (authLoading) return;
-    if (!user) { router.push("/login"); return; }
-    loadData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, authLoading, router]);
+    if (!authLoading && !user) router.replace("/login");
+    else if (user) load();
+  }, [user, authLoading, load, router]);
 
-  async function loadData() {
-    const s = await getStudent(user!.id);
-    if (!s) { router.push("/onboarding"); return; }
-    if (!s.onboarding_completed) { router.push("/onboarding"); return; }
+  // Open chest
+  const handleOpenChest = useCallback(async (chestId: string) => {
+    if (!user || !student) return;
+    const chest = (student.chest_inventory || []).find(c => c.id === chestId);
+    if (!chest) return;
 
-    // Load extra fields (gems, shields)
-    const { data: extraData } = await supabase
-      .from("students")
-      .select("streak_shields, gems, weekly_xp")
-      .eq("id", user!.id)
-      .single();
+    const cfg = CHEST_CFG[chest.tier];
+    const xpGain   = Math.floor(Math.random() * cfg.hours * 15) + cfg.hours * 8;
+    const gemsGain  = Math.floor(Math.random() * cfg.hours * 4);
 
-    setStudent({ ...s, ...(extraData || {}) });
+    // Mark as opened + grant rewards
+    const newInventory = (student.chest_inventory || []).filter(c => c.id !== chestId);
+    await supabase.from("students")
+      .update({
+        chest_inventory: newInventory,
+        xp:   (student.xp   || 0) + xpGain,
+        gems: (student.gems || 0) + gemsGain,
+      })
+      .eq("id", user.id);
 
-    // Weekly reset check
-    await checkWeeklyReset(user!.id);
+    setStudent(prev => prev ? {
+      ...prev,
+      chest_inventory: newInventory,
+      xp:   (prev.xp   || 0) + xpGain,
+      gems: (prev.gems || 0) + gemsGain,
+    } : prev);
+  }, [user, student]);
 
-    await generateDailyTasks(user!.id, s.subjects || []);
+  // Start quests → go to learn page
+  const handleStart = () => router.push("/learn");
 
-    const [todayTasks, progress, earnedKeys, allAch, ghostY, ghostT, bossData, mysteryData, nightData] = await Promise.all([
-      getTodayTasks(user!.id),
-      getSubjectProgress(user!.id),
-      getStudentAchievements(user!.id),
-      getAllAchievements(),
-      getYesterdayGhost(user!.id),
-      getTodayGhostProgress(user!.id),
-      getTodayBoss(),
-      getTodayMysteryBox(user!.id),
-      getTodayNightChallenge(user!.id),
-    ]);
-
-    setTasks(todayTasks);
-    setSubjectProgress(progress);
-    setGhost(ghostY);
-    setTodayGhost(ghostT);
-    setBoss(bossData);
-    setMysteryBoxClaimed(mysteryData);
-    setNightChallenge(nightData);
-
-    if (bossData) {
-      const attempt = await getMyBossAttempt(user!.id, bossData.id);
-      setBossAttempt(attempt);
-    }
-
-    const earned = allAch.filter(a => earnedKeys.includes(a.key)).slice(-3).reverse();
-    setRecentAchievements(earned);
-    setLoading(false);
+  if (authLoading || loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <motion.div
+          animate={{ rotate: 360 }}
+          transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+          className="w-10 h-10 rounded-full border-4 border-gordemy-purple border-t-transparent"
+        />
+      </div>
+    );
   }
 
-  const handleRefresh = async () => {
-    if (!user || !student || refreshing) return;
-    setRefreshing(true);
-    await refreshDailyTasks(user.id, student.subjects || []);
-    const newTasks = await getTodayTasks(user.id);
-    setTasks(newTasks);
-    setRefreshing(false);
-  };
-
-  const handleUseShield = async () => {
-    if (!user || shieldUsed) return;
-    const ok = await applyStreakShield(user.id);
-    if (ok) {
-      setStudent((prev: any) => ({ ...prev, streak_shields: (prev.streak_shields || 1) - 1 }));
-      setShieldUsed(true);
-    }
-  };
-
-  const handleOpenMysteryBox = async () => {
-    if (!user || mysteryBoxOpening || mysteryBoxClaimed) return;
-    setMysteryBoxOpening(true);
-    const reward = await claimMysteryBox(user.id);
-    setMysteryBoxClaimed(reward);
-    setMysteryBoxOpening(false);
-    // Update student gems/xp
-    const { data: fresh } = await supabase.from("students").select("xp, level, gems, streak_shields").eq("id", user.id).single();
-    if (fresh) setStudent((prev: any) => ({ ...prev, ...fresh }));
-  };
-
-  if (authLoading || loading) return <DashboardSkeleton />;
   if (!student) return null;
 
-  const completedCount = tasks.filter((t) => t.completed).length;
-  const totalTasks = tasks.length;
-  const todayProgress = totalTasks > 0 ? (completedCount / totalTasks) * 100 : 0;
-  const league = getLeague(student.xp || 0);
-  const xpForNextLevel = (student.level || 1) * 100;
-  const xpProgress = Math.min(100, Math.round(((student.xp || 0) % 100)));
-  const banner = getMotivationalBanner(student, completedCount, totalTasks);
-  const xpMult = getXPMultiplier();
-  const playerTitle = getPlayerTitle(student.level || 1, student.total_tasks_completed || 0, student.streak || 0);
-  const allTasksDone = completedCount === totalTasks && totalTasks > 0;
-  const nightActive = isNightTime();
+  const avatar: AvatarData = {
+    ...DEFAULT_AVATAR,
+    ...(student.avatar_data || {}),
+  };
+
+  const chests = (student.chest_inventory || []).filter(c => !c.opened);
+  const playerTitle = getPlayerTitle(student.level || 1, (student as any).total_tasks_completed || 0, student.streak || 0);
+  const bossDaily  = !!(student.boss_daily_done);
+  const bossWeekly = !!(student.boss_weekly_done);
 
   return (
-    <div className="max-w-[640px] mx-auto px-6 py-8">
+    <div className="max-w-[480px] mx-auto px-4 py-6 pb-24">
+      {/* Character Stage */}
+      <CharacterStage avatar={avatar} student={student} title={playerTitle} />
 
-      {/* Motivational Banner */}
-      <motion.div
-        initial={{ opacity: 0, y: -10 }}
-        animate={{ opacity: 1, y: 0 }}
-        className={`bg-gradient-to-r ${banner.color} border rounded-2xl px-5 py-4 mb-6 flex items-center gap-3`}
-      >
-        <span className="text-2xl">{banner.emoji}</span>
-        <p className="text-sm font-semibold leading-snug">{banner.text}</p>
-      </motion.div>
+      <div className="mt-6">
+        {/* Chest Inventory */}
+        <ChestInventory chests={chests} onOpen={handleOpenChest} />
 
-      {/* Greeting + Gems */}
-      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mb-6 flex items-start justify-between">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <h1 className="text-2xl font-extrabold">Привіт, {student.name || "учень"}! 👋</h1>
-          </div>
-          <div className={`text-sm font-bold mb-1 ${playerTitle.color}`}>{playerTitle.title}</div>
-          <p className="text-gordemy-muted text-sm">
-            {completedCount === totalTasks && totalTasks > 0
-              ? "Всі завдання виконано! Відпочинь або тренуйся далі."
-              : `${completedCount} з ${totalTasks} завдань виконано сьогодні`}
-          </p>
-        </div>
-        {(student.gems || 0) > 0 && (
-          <div className="flex items-center gap-1.5 bg-gordemy-card border border-gordemy-border rounded-xl px-3 py-2">
-            <span className="text-lg">💎</span>
-            <span className="text-white font-bold">{student.gems}</span>
-          </div>
-        )}
-      </motion.div>
+        {/* Daily Quests */}
+        <DailyQuests tasks={tasks} onStart={handleStart} />
 
-      {/* League Badge */}
-      <motion.div
-        initial={{ opacity: 0, scale: 0.9 }}
-        animate={{ opacity: 1, scale: 1 }}
-        transition={{ delay: 0.05 }}
-        className="flex items-center gap-3 mb-6"
-      >
-        <div className={`flex items-center gap-2 px-4 py-2 rounded-xl border text-sm font-bold ${league.bg}`}>
-          <span className="text-xl">{league.icon}</span>
-          <span className={league.color}>{league.name}</span>
-        </div>
-        <Link href="/leaderboard" className="text-xs text-gordemy-muted hover:text-gordemy-blue transition-colors">
-          Рейтинг →
-        </Link>
-        <Link href="/achievements" className="ml-auto text-xs text-gordemy-muted hover:text-gordemy-orange transition-colors">
-          🏆 Досягнення
-        </Link>
-      </motion.div>
+        {/* Game Mode Grid */}
+        <GameModeGrid bossDaily={bossDaily} bossWeekly={bossWeekly} />
 
-      {/* Recent Achievements */}
-      {recentAchievements.length > 0 && (
-        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.08 }} className="flex gap-2 mb-6 flex-wrap">
-          {recentAchievements.map(a => (
-            <Link key={a.key} href="/achievements">
-              <div className="flex items-center gap-1.5 bg-gordemy-card border border-gordemy-border rounded-xl px-3 py-1.5 text-xs font-semibold hover:border-gordemy-muted/50 transition-all">
-                <span>{a.icon}</span><span>{a.name}</span>
-              </div>
-            </Link>
-          ))}
-        </motion.div>
-      )}
-
-      {/* Stats Grid */}
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.1 }}
-        className="grid grid-cols-4 gap-3 mb-6"
-      >
-        <StatCard label="Рівень" value={student.level || 1} icon="⭐" color="text-gordemy-orange" />
-        <StatCard label="XP" value={student.xp || 0} icon="💎" color="text-gordemy-blue" />
-        <StatCard label="Стрік" value={`${student.streak || 0}д`} icon="🔥" color="text-gordemy-orange" />
-        <StatCard label="Задачі" value={student.total_tasks_completed || 0} icon="✅" color="text-gordemy-green" />
-      </motion.div>
-
-      {/* XP Level Bar */}
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.15 }}
-        className="bg-gordemy-card border border-gordemy-border rounded-2xl p-4 mb-6"
-      >
-        <div className="flex justify-between items-center mb-2">
-          <span className="text-xs font-semibold text-gordemy-muted">Рівень {student.level || 1}</span>
-          <span className="text-xs text-gordemy-muted">{student.xp || 0} / {xpForNextLevel} XP</span>
-          <span className="text-xs font-semibold text-gordemy-muted">Рівень {(student.level || 1) + 1}</span>
-        </div>
-        <div className="h-3 bg-gordemy-bg rounded-full overflow-hidden relative">
-          <motion.div
-            className="h-full bg-gradient-to-r from-gordemy-blue via-gordemy-purple to-gordemy-blue rounded-full"
-            initial={{ width: 0 }}
-            animate={{ width: `${xpProgress}%` }}
-            transition={{ duration: 1, ease: "easeOut", delay: 0.3 }}
-          />
-        </div>
-        <p className="text-xs text-gordemy-muted mt-1.5 text-center">
-          {xpForNextLevel - (student.xp || 0)} XP до наступного рівня
-        </p>
-      </motion.div>
-
-      {/* ── XP MULTIPLIER BANNER ──────────────────────── */}
-      {xpMult.active && (
-        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.17 }}
-          className="mb-4 border border-gordemy-orange/30 rounded-xl bg-gordemy-orange/10 px-4 py-3 flex items-center gap-3">
-          <span className="text-2xl">{xpMult.emoji}</span>
-          <div className="flex-1">
-            <div className="text-white font-bold text-sm">{xpMult.label} активний!</div>
-            <div className="text-gordemy-muted text-xs">x{xpMult.multiplier} XP за кожну відповідь зараз</div>
-          </div>
-          <span className="text-gordemy-orange font-black text-lg">x{xpMult.multiplier}</span>
-        </motion.div>
-      )}
-
-      {/* ── MYSTERY BOX ────────────────────────────────── */}
-      {allTasksDone && (
-        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: 0.19 }}
-          className="mb-4">
-          {!mysteryBoxClaimed ? (
-            <button onClick={handleOpenMysteryBox} disabled={mysteryBoxOpening}
-              className="w-full border border-gordemy-purple/40 rounded-xl bg-gradient-to-r from-gordemy-purple/20 to-gordemy-blue/10 p-4 text-center group hover:border-gordemy-purple/60 transition-all">
-              <motion.div animate={{ rotate: mysteryBoxOpening ? 360 : 0, scale: mysteryBoxOpening ? [1, 1.2, 1] : 1 }}
-                transition={{ duration: 0.8, repeat: mysteryBoxOpening ? Infinity : 0 }}
-                className="text-4xl mb-2">🎁</motion.div>
-              <div className="text-white font-bold">Mystery Box</div>
-              <div className="text-gordemy-muted text-xs mt-1">
-                {mysteryBoxOpening ? "Відкриваємо..." : "Всі завдання виконано! Відкрий свій приз 🎉"}
-              </div>
-            </button>
-          ) : (
-            <div className="border border-gordemy-green/30 rounded-xl bg-gordemy-green/10 p-4 text-center">
-              <div className="text-3xl mb-2">{mysteryBoxClaimed.emoji || "✨"}</div>
-              <div className="text-gordemy-green font-bold">Отримано: {mysteryBoxClaimed.label}!</div>
-              <div className="text-gordemy-muted text-xs mt-1">Mystery Box відкрито сьогодні</div>
-            </div>
-          )}
-        </motion.div>
-      )}
-
-      {/* ── NIGHT CHALLENGE ────────────────────────────── */}
-      {nightActive && (
-        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.21 }}
-          className="mb-4">
-          {nightChallenge?.attempted ? (
-            <div className={`border rounded-xl p-4 flex items-center gap-3 ${nightChallenge.won ? "border-gordemy-green/30 bg-gordemy-green/5" : "border-gordemy-muted/20 bg-gordemy-card"}`}>
-              <span className="text-2xl">🌙</span>
-              <div>
-                <div className="text-sm font-bold text-white">Нічний виклик пройдено</div>
-                <div className="text-xs text-gordemy-muted">{nightChallenge.won ? `+${nightChallenge.xpEarned} XP + 💎 5 гемів` : "Повернись завтра вночі!"}</div>
-              </div>
-            </div>
-          ) : (
-            <Link href="/boss?night=1">
-              <div className="border border-gordemy-purple/40 rounded-xl bg-gordemy-purple/10 p-4 flex items-center gap-3 hover:border-gordemy-purple/60 transition-all cursor-pointer group">
-                <motion.span animate={{ opacity: [1, 0.5, 1] }} transition={{ duration: 2, repeat: Infinity }} className="text-2xl">🌙</motion.span>
-                <div className="flex-1">
-                  <div className="text-sm font-bold text-white">Нічний виклик</div>
-                  <div className="text-xs text-gordemy-muted">Одне hard питання • +150 XP + 💎 5 гемів</div>
-                </div>
-                <span className="text-gordemy-purple font-bold group-hover:translate-x-1 transition-transform">→</span>
-              </div>
-            </Link>
-          )}
-        </motion.div>
-      )}
-
-      {/* ── BOSS FIGHT CARD ─────────────────────────────── */}
-      {boss && (
-        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.18 }} className="mb-4">
-          <BossCard boss={boss} attempt={bossAttempt} />
-        </motion.div>
-      )}
-
-      {/* ── GHOST RACE ──────────────────────────────────── */}
-      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="mb-4">
-        <GhostRaceWidget ghost={ghost} today={todayGhost} completedToday={completedCount} />
-      </motion.div>
-
-      {/* ── STREAK SHIELD ───────────────────────────────── */}
-      {(student.streak_shields || 0) > 0 && !shieldUsed && (
-        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.22 }} className="mb-4">
-          <StreakShieldWidget
-            shields={student.streak_shields || 0}
-            streak={student.streak || 0}
-            onUse={handleUseShield}
-          />
-        </motion.div>
-      )}
-
-      {/* Game Mode Banner */}
-      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.25 }} className="mb-6">
-        <Link href="/game">
-          <div className="relative overflow-hidden bg-gradient-to-r from-gordemy-blue/20 via-gordemy-purple/20 to-gordemy-blue/20 border border-gordemy-blue/30 rounded-2xl p-5 hover:border-gordemy-blue/60 transition-all group cursor-pointer">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-4">
-                <span className="text-4xl">⚔️</span>
-                <div>
-                  <p className="text-sm font-extrabold text-white">Game Mode</p>
-                  <p className="text-xs text-gordemy-muted mt-0.5">Бийся проти НМТ-бота та заробляй XP</p>
-                </div>
-              </div>
-              <span className="text-gordemy-blue font-bold text-lg group-hover:translate-x-1 transition-transform">→</span>
-            </div>
-          </div>
-        </Link>
-      </motion.div>
-
-      {/* Today Progress */}
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.28 }}
-        className="bg-gordemy-card border border-gordemy-border rounded-2xl p-5 mb-6"
-      >
-        <div className="flex justify-between items-center mb-3">
-          <span className="text-sm font-semibold">Прогрес сьогодні</span>
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-gordemy-muted">{completedCount}/{totalTasks}</span>
-            <button
-              onClick={handleRefresh}
-              disabled={refreshing}
-              className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition-all ${
-                refreshing
-                  ? "text-gordemy-muted border-gordemy-border cursor-not-allowed"
-                  : "text-gordemy-blue border-gordemy-blue/30 hover:bg-gordemy-blue/10 cursor-pointer"
-              }`}
-            >
-              <span className={refreshing ? "animate-spin" : ""}>🔄</span>
-              {refreshing ? "Оновлення..." : "Нові завдання"}
-            </button>
-          </div>
-        </div>
-        <div className="h-2.5 bg-gordemy-bg rounded-full overflow-hidden">
-          <motion.div
-            className="h-full bg-gradient-to-r from-gordemy-blue to-gordemy-purple rounded-full"
-            initial={{ width: 0 }}
-            animate={{ width: `${todayProgress}%` }}
-            transition={{ duration: 0.8, ease: "easeOut" }}
-            style={{ boxShadow: "0 0 10px rgba(59,130,246,0.5)" }}
-          />
-        </div>
-        {completedCount > 0 && (
-          <div className="flex gap-1 mt-3 flex-wrap">
-            {Array.from({ length: completedCount }).map((_, i) => (
-              <motion.div key={i} initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ delay: i * 0.05 }}
-                className="w-5 h-5 rounded-full bg-gordemy-green/20 border border-gordemy-green/40 flex items-center justify-center text-[10px]">✓</motion.div>
-            ))}
-            {Array.from({ length: totalTasks - completedCount }).map((_, i) => (
-              <div key={i} className="w-5 h-5 rounded-full bg-gordemy-border/30 border border-gordemy-border" />
-            ))}
-          </div>
-        )}
-      </motion.div>
-
-      {/* Today's Tasks */}
-      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="mb-8">
-        <h2 className="text-lg font-bold mb-4">
-          Завдання на сьогодні
-          <span className="ml-2 text-sm font-normal text-gordemy-muted">({totalTasks} задач)</span>
-        </h2>
-
-        <AnimatePresence mode="wait">
-          {tasks.length === 0 ? (
-            <motion.div key="empty" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-center py-12 text-gordemy-muted">
-              <div className="text-4xl mb-3">📚</div>
-              <p>Завдання генеруються...</p>
+        {/* Quick links */}
+        <div className="flex gap-3 flex-wrap">
+          <Link href="/leaderboard" className="flex-1">
+            <motion.div whileTap={{ scale: 0.95 }} className="p-3 rounded-2xl border border-gordemy-border bg-gordemy-card text-center">
+              <div className="text-xl">🏆</div>
+              <div className="text-xs text-gordemy-muted mt-1">Рейтинг</div>
             </motion.div>
-          ) : (
-            <motion.div key="tasks" className="flex flex-col gap-3">
-              {tasks.map((task, i) => (
-                <motion.div key={task.id} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.35 + i * 0.04 }}>
-                  {task.completed ? (
-                    <div className="bg-gordemy-card border border-gordemy-border rounded-xl p-4 opacity-60">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm ${task.is_correct ? "bg-gordemy-green/20 text-gordemy-green" : "bg-red-500/20 text-red-400"}`}>
-                            {task.is_correct ? "✓" : "✗"}
-                          </div>
-                          <div>
-                            <div className="text-sm font-semibold line-through">{task.title}</div>
-                            <div className="text-xs text-gordemy-muted">+{task.is_correct ? task.xp_reward : Math.floor(task.xp_reward / 2)} XP</div>
-                          </div>
-                        </div>
-                        <span className={`text-xs font-bold ${task.is_correct ? "text-gordemy-green" : "text-red-400"}`}>
-                          {task.is_correct ? "Вірно" : "Хибно"}
-                        </span>
-                      </div>
-                    </div>
-                  ) : (
-                    <Link href={`/learn?task=${task.id}`}>
-                      <div className="bg-gordemy-card border border-gordemy-border rounded-xl p-4 hover:border-gordemy-blue/40 transition-all cursor-pointer group">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
-                            <div className="w-8 h-8 rounded-lg bg-gordemy-blue/15 text-gordemy-blue flex items-center justify-center text-sm font-bold">
-                              {subjectShort[task.subject]?.split(" ")[0] || "📝"}
-                            </div>
-                            <div>
-                              <div className="text-sm font-semibold group-hover:text-gordemy-blue transition-colors">{task.title}</div>
-                              <div className="flex items-center gap-2 mt-0.5">
-                                <span className={`text-xs px-2 py-0.5 rounded-md border ${difficultyColors[task.difficulty]}`}>
-                                  {task.difficulty === "easy" ? "Легко" : task.difficulty === "medium" ? "Середнє" : "Складно"}
-                                </span>
-                                <span className="text-xs text-gordemy-muted">+{task.xp_reward} XP</span>
-                              </div>
-                            </div>
-                          </div>
-                          <span className="text-gordemy-muted group-hover:text-gordemy-blue transition-colors">→</span>
-                        </div>
-                      </div>
-                    </Link>
-                  )}
-                </motion.div>
-              ))}
+          </Link>
+          <Link href="/achievements" className="flex-1">
+            <motion.div whileTap={{ scale: 0.95 }} className="p-3 rounded-2xl border border-gordemy-border bg-gordemy-card text-center">
+              <div className="text-xl">🎖️</div>
+              <div className="text-xs text-gordemy-muted mt-1">Досягнення</div>
             </motion.div>
-          )}
-        </AnimatePresence>
-      </motion.div>
-
-      {/* Subject Progress */}
-      {subjectProgress.length > 0 && (
-        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }} className="mb-8">
-          <h2 className="text-lg font-bold mb-4">Прогрес по предметах</h2>
-          <div className="flex flex-col gap-3">
-            {subjectProgress.map((sp, i) => (
-              <motion.div key={sp.subject} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.55 + i * 0.05 }}
-                className="bg-gordemy-card border border-gordemy-border rounded-xl p-4">
-                <div className="flex justify-between items-center mb-2">
-                  <span className="text-sm font-semibold">{subjectNames[sp.subject] || sp.subject}</span>
-                  <span className={`text-sm font-bold ${sp.percent >= 80 ? "text-gordemy-green" : sp.percent >= 60 ? "text-gordemy-blue" : sp.percent >= 40 ? "text-gordemy-orange" : "text-red-400"}`}>
-                    {sp.percent}% ({sp.correct}/{sp.total})
-                  </span>
-                </div>
-                <div className="h-2 bg-gordemy-bg rounded-full overflow-hidden">
-                  <motion.div
-                    className={`h-full rounded-full ${sp.percent >= 80 ? "bg-gordemy-green" : sp.percent >= 60 ? "bg-gordemy-blue" : sp.percent >= 40 ? "bg-gordemy-orange" : "bg-red-400"}`}
-                    initial={{ width: 0 }}
-                    animate={{ width: `${sp.percent}%` }}
-                    transition={{ duration: 0.7, ease: "easeOut", delay: 0.6 + i * 0.05 }}
-                  />
-                </div>
-              </motion.div>
-            ))}
-          </div>
-        </motion.div>
-      )}
-    </div>
-  );
-}
-
-function StatCard({ label, value, icon, color }: { label: string; value: string | number; icon: string; color: string }) {
-  return (
-    <div className="bg-gordemy-card border border-gordemy-border rounded-xl p-3 text-center">
-      <div className="text-lg mb-0.5">{icon}</div>
-      <div className={`text-xl font-extrabold ${color}`}>{value}</div>
-      <div className="text-xs text-gordemy-muted">{label}</div>
+          </Link>
+          <Link href="/avatar" className="flex-1">
+            <motion.div whileTap={{ scale: 0.95 }} className="p-3 rounded-2xl border border-gordemy-border bg-gordemy-card text-center">
+              <div className="text-xl">🎨</div>
+              <div className="text-xs text-gordemy-muted mt-1">Аватар</div>
+            </motion.div>
+          </Link>
+          <Link href="/clan" className="flex-1">
+            <motion.div whileTap={{ scale: 0.95 }} className="p-3 rounded-2xl border border-gordemy-border bg-gordemy-card text-center">
+              <div className="text-xl">🏘️</div>
+              <div className="text-xs text-gordemy-muted mt-1">Клан</div>
+            </motion.div>
+          </Link>
+        </div>
+      </div>
     </div>
   );
 }
