@@ -11,9 +11,12 @@ import {
 import { getLeague } from "@/lib/achievements";
 import { getPlayerTitle, getXPMultiplier } from "@/lib/gamification";
 import {
-  CHARACTERS, HATS, ACCESSORIES, AURAS, FRAMES,
+  HATS, ACCESSORIES, FRAMES,
   AURA_STYLES, FRAME_STYLES, DEFAULT_AVATAR,
+  normalizeAvatarFull, type AvatarConfig,
 } from "@/lib/avatar";
+import ModularHero from "@/components/ModularHero";
+import { normalizeToEquip } from "@/lib/equipment";
 import { supabase } from "@/lib/supabase";
 import Link from "next/link";
 
@@ -120,7 +123,8 @@ function CharacterStage({ avatar, student, title }: {
   student: Student & { gems?: number; streak?: number; level?: number; xp?: number };
   title: { title: string; color: string };
 }) {
-  const char  = CHARACTERS.find(c => c.id === avatar.character) || CHARACTERS[0];
+  const full = normalizeAvatarFull({ ...DEFAULT_AVATAR, ...avatar } as AvatarConfig);
+  const equip = normalizeToEquip(full);
   const hat   = HATS.find(h => h.id === avatar.hat);
   const acc   = ACCESSORIES.find(a => a.id === avatar.accessory);
   const auraStyle  = AURA_STYLES[avatar.aura as keyof typeof AURA_STYLES]  ?? "";
@@ -183,11 +187,13 @@ function CharacterStage({ avatar, student, title }: {
         transition={{ duration: 3.5, repeat: Infinity, ease: "easeInOut" }}
         className="relative z-10 mb-4"
       >
-        <div className={`relative w-36 h-36 rounded-full flex items-center justify-center border-4 ${frameStyle} ${auraStyle} shadow-2xl`}>
-          <span className="text-8xl select-none">{char.emoji}</span>
-          {hat && hat.id !== "none" && (
-            <span className="absolute -top-5 right-0 text-4xl drop-shadow-lg">{hat.emoji}</span>
-          )}
+        <div className={`relative flex h-36 w-36 items-center justify-center rounded-full border-4 ${frameStyle} ${auraStyle} shadow-2xl`}>
+          <ModularHero
+            equip={equip}
+            hatEmoji={hat && hat.id !== "none" ? hat.emoji : undefined}
+            height={128}
+            className="scale-90"
+          />
           {acc && acc.id !== "none" && (
             <span className="absolute -bottom-2 -right-3 text-3xl drop-shadow-lg">{acc.emoji}</span>
           )}

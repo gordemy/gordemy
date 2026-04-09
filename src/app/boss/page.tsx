@@ -1,12 +1,18 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback, Suspense } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAuth } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase";
 import { getComboState } from "@/lib/gamification";
-import { CHARACTERS, DEFAULT_AVATAR } from "@/lib/avatar";
+import {
+  CHARACTERS,
+  DEFAULT_AVATAR,
+  normalizeAvatarFull,
+  calcHeroCombat,
+  type AvatarConfig,
+} from "@/lib/avatar";
 import { getStudent, saveQuestionHistory, type Question } from "@/lib/student";
 import BattleCharacter, { type BattleCue } from "@/components/BattleCharacter";
 
@@ -30,8 +36,6 @@ const WEEKLY_BOSS: BossConfig = {
   xpWin:200,xpLose:40,chestTier:"epic",color:"border-orange-400/60",
   gradient:"from-orange-900/40 to-amber-950/60",description:"Тижнева битва · Складніше · Більше нагород",
 };
-const PLAYER_HP = 100;
-
 function FloatingDmg({texts}:{texts:FloatText[]}) {
   return (
     <div className="absolute inset-0 pointer-events-none overflow-hidden">
@@ -117,7 +121,8 @@ function BossPageInner() {
   const [questions,setQuestions]=useState<Question[]>([]);
   const [qIdx,setQIdx]=useState(0);
   const [selected,setSelected]=useState<number|null>(null);
-  const [playerHP,setPlayerHP]=useState(PLAYER_HP);
+  const [playerMaxHp,setPlayerMaxHp]=useState(100);
+  const [playerHP,setPlayerHP]=useState(100);
   const [bossHP,setBossHP]=useState(cfg.hp);
   const [combo,setCombo]=useState(0);
   const [xpEarned,setXpEarned]=useState(0);
@@ -133,12 +138,19 @@ function BossPageInner() {
   const timerRef=useRef<NodeJS.Timeout|null>(null);
   const floatId=useRef(0);
   const bossHPRef=useRef(cfg.hp);
-  const playerHPRef=useRef(PLAYER_HP);
+  const playerHPRef=useRef(100);
   const xpRef=useRef(0);
   const comboRef=useRef(0);
   const battleCueNonce=useRef(0);
   const [battleCue,setBattleCue]=useState<BattleCue|null>(null);
   const pendingWinAnim=useRef(false);
+
+  const heroCombat=useMemo(()=>{
+    if(!student)return calcHeroCombat(normalizeAvatarFull(DEFAULT_AVATAR));
+    const raw=(student as any).avatar_data;
+    const av=raw&&typeof raw==="object"?raw:{};
+    return calcHeroCombat(normalizeAvatarFull({...DEFAULT_AVATAR,...av}));
+  },[student]);
 
   useEffect(()=>{
     if(!user)return;
@@ -146,6 +158,17 @@ function BossPageInner() {
       const st=await getStudent(user.id);
       if(!st){router.replace("/dashboard");return;}
       setStudent(st);
+      const rawAv = (st as any).avatar_data;
+      const av =
+        rawAv && typeof rawAv === "object"
+          ? (rawAv as Partial<AvatarConfig>)
+          : {};
+      const maxHp = calcHeroCombat(
+        normalizeAvatarFull({ ...DEFAULT_AVATAR, ...av }),
+      ).maxHp;
+      setPlayerMaxHp(maxHp);
+      playerHPRef.current = maxHp;
+      setPlayerHP(maxHp);
       const today=new Date().toISOString().split("T")[0];
       const s=st as any;
       if(mode==="daily"&&s.boss_daily_reset===today)setRewardDoneToday(true);
@@ -205,8 +228,12 @@ function BossPageInner() {
     comboRef.current=newCombo;
     setCombo(newCombo);
     const mult=getComboState(newCombo).multiplier;
-    const dmgBoss=correct?Math.round(18*mult):0;
-    const dmgPlayer=correct?0:Math.round(15+Math.random()*10);
+    const dmgBoss=correct
+      ?Math.round(18*mult*heroCombat.damageMult*(1+(heroCombat.comboSpeed-1)*0.12))
+      :0;
+    const dmgPlayer=correct
+      ?0
+      :Math.max(1,Math.round((15+Math.random()*10)*(1-heroCombat.defenseMitigation)));
     const xpGain=correct?Math.round(8*mult):0;
     xpRef.current+=xpGain;
     setXpEarned(xpRef.current);
@@ -239,7 +266,7 @@ function BossPageInner() {
       if(next>=questions.length){await endFight(bossHPRef.current<playerHPRef.current);return;}
       setQIdx(next);setSelected(null);
     },afterRoundMs);
-  },[selected,questions,qIdx,addFloat,endFight,user,mode]);
+  },[selected,questions,qIdx,addFloat,endFight,user,mode,heroCombat]);
 
   function onBattleActionComplete(kind:BattleCue["kind"]){
     if(kind==="attack"&&pendingWinAnim.current){
@@ -274,7 +301,7 @@ function BossPageInner() {
     const final=pool.length>=3?pool:(await supabase.from("questions").select("*").limit(cfg.questions)).data||[];
     setQuestions(final.slice(0,cfg.questions) as Question[]);
     bossHPRef.current=cfg.hp;setBossHP(cfg.hp);
-    playerHPRef.current=PLAYER_HP;setPlayerHP(PLAYER_HP);
+    playerHPRef.current=playerMaxHp;setPlayerHP(playerMaxHp);
     comboRef.current=0;setCombo(0);
     xpRef.current=0;setXpEarned(0);
     setRewardGrantedInFight(false);
@@ -282,7 +309,7 @@ function BossPageInner() {
     setPhase("countdown");setCountdown(3);
     let c=3;
     const cd=setInterval(()=>{c--;setCountdown(c);if(c<=0){clearInterval(cd);setPhase("battle");}},800);
-  },[user,student,cfg]);
+  },[user,student,cfg,playerMaxHp]);
 
   if(authLoading)return(
     <div className="min-h-screen flex items-center justify-center">
@@ -394,7 +421,7 @@ function BossPageInner() {
         <span className="text-xs text-gordemy-muted ml-1 self-center">{qIdx+1}/{questions.length}</span>
       </div>
       <div className="flex gap-3 mb-3 relative">
-        <HPBar label={student?.name||"Ти"} hp={playerHP} maxHp={PLAYER_HP} color="border-gordemy-blue/40" emoji="⚔️" shaking={shakePlayer}/>
+        <HPBar label={student?.name||"Ти"} hp={playerHP} maxHp={playerMaxHp} color="border-gordemy-blue/40" emoji="⚔️" shaking={shakePlayer}/>
         <div className="flex items-center font-black text-gordemy-orange text-sm">VS</div>
         <HPBar label={cfg.name} hp={bossHP} maxHp={cfg.hp} color={cfg.color} emoji={cfg.emoji} shaking={shakeBoss}/>
         <FloatingDmg texts={floats}/>

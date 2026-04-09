@@ -7,63 +7,72 @@ import { useAuth } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase";
 import { getStudentAchievements } from "@/lib/achievements";
 import {
-  CHARACTERS, HATS, ACCESSORIES, AURAS, FRAMES,
+  CHARACTERS, HATS, ACCESSORIES, FRAMES,
   DEFAULT_AVATAR, isUnlocked, unlockLabel,
   RARITY_COLORS, RARITY_GLOW, RARITY_LABEL_COLOR, AURA_STYLES, FRAME_STYLES,
+  normalizeAvatarFull,
   type AvatarConfig, type AvatarItem,
 } from "@/lib/avatar";
+import ModularHero from "@/components/ModularHero";
+import { normalizeToEquip, EQUIPMENT_BY_SLOT, type EquipmentPiece } from "@/lib/equipment";
 
 // ─── Avatar Preview ───────────────────────────────────────────────────────────
+
+function mapEquipItem(p: EquipmentPiece): AvatarItem {
+  return {
+    id: p.id,
+    emoji: p.emoji,
+    name: p.name,
+    unlock: p.unlock as AvatarItem["unlock"],
+    rarity: p.rarity,
+    description: p.description,
+  };
+}
 
 function AvatarPreview({
   config, name, level, title, animated = false
 }: {
   config: AvatarConfig; name: string; level: number; title: string; animated?: boolean
 }) {
-  const char = CHARACTERS.find(c => c.id === config.character) || CHARACTERS[0];
+  const full = normalizeAvatarFull(config);
+  const equip = normalizeToEquip(full);
   const hat = HATS.find(h => h.id === config.hat);
   const acc = ACCESSORIES.find(a => a.id === config.accessory);
-  const auraStyle = AURA_STYLES[config.aura] || AURA_STYLES.none;
+  const auraStyle = AURA_STYLES[config.aura] || AURA_STYLES.none || "";
   const frameStyle = FRAME_STYLES[config.frame] || FRAME_STYLES.none;
 
   return (
     <div className="flex flex-col items-center gap-3">
-      {/* Frame + Aura + Character */}
+      {/* Frame + Aura + Modular hero */}
       <motion.div
-        className={`relative w-36 h-36 rounded-3xl border-4 ${frameStyle} ${auraStyle} flex items-center justify-center overflow-hidden`}
+        className={`relative flex h-44 w-44 items-center justify-center rounded-3xl border-4 ${frameStyle} ${auraStyle} overflow-hidden`}
         animate={animated ? { scale: [1, 1.02, 1] } : {}}
         transition={{ repeat: Infinity, duration: 3, ease: "easeInOut" }}
       >
-        {/* Aura glow */}
-        {config.aura !== "none" && (
+        {config.aura !== "none" && config.aura !== "aura_none" && (
           <div className={`absolute inset-0 opacity-40 ${auraStyle} blur-xl`} />
         )}
 
-        {/* Hat (top) */}
-        {hat && hat.emoji && (
-          <div className="absolute top-1 left-1/2 -translate-x-1/2 text-2xl">
-            {hat.emoji}
-          </div>
-        )}
-
-        {/* Character */}
         <motion.div
-          className="text-6xl select-none z-10"
-          animate={animated ? { y: [0, -4, 0] } : {}}
+          className="relative z-10 flex flex-col items-center justify-center"
+          animate={animated ? { y: [0, -3, 0] } : {}}
           transition={{ repeat: Infinity, duration: 2.5, ease: "easeInOut" }}
         >
-          {char.emoji}
+          <ModularHero
+            equip={equip}
+            hatEmoji={hat && hat.id !== "none" ? hat.emoji : undefined}
+            height={168}
+            className="scale-95"
+          />
         </motion.div>
 
-        {/* Accessory (bottom-right) */}
-        {acc && acc.emoji && (
-          <div className="absolute bottom-2 right-2 text-2xl">
+        {acc && acc.emoji && acc.id !== "none" && (
+          <div className="absolute bottom-1 right-1 z-20 text-xl opacity-90">
             {acc.emoji}
           </div>
         )}
 
-        {/* Level badge */}
-        <div className="absolute top-1 right-1 bg-gordemy-bg/80 rounded-full w-7 h-7 flex items-center justify-center text-xs font-black text-gordemy-blue border border-gordemy-blue/30">
+        <div className="absolute top-1 right-1 z-20 flex h-7 w-7 items-center justify-center rounded-full border border-gordemy-blue/30 bg-gordemy-bg/80 text-xs font-black text-gordemy-blue">
           {level}
         </div>
       </motion.div>
@@ -111,7 +120,8 @@ function ItemGrid({
             <div className={`absolute top-1 right-1 w-2 h-2 rounded-full ${
               item.rarity === "legendary" ? "bg-gordemy-orange" :
               item.rarity === "epic" ? "bg-gordemy-purple" :
-              item.rarity === "rare" ? "bg-gordemy-blue" : "bg-gordemy-border"
+              item.rarity === "rare" ? "bg-gordemy-blue" :
+              item.rarity === "uncommon" ? "bg-emerald-500" : "bg-gordemy-border"
             }`} />
 
             {/* Emoji */}
@@ -217,8 +227,9 @@ export default function AvatarPage() {
 
       if (stu.avatar_data) {
         const av = typeof stu.avatar_data === "string" ? JSON.parse(stu.avatar_data) : stu.avatar_data;
-        setConfig({ ...DEFAULT_AVATAR, ...av });
-        setSavedConfig({ ...DEFAULT_AVATAR, ...av });
+        const merged = normalizeAvatarFull({ ...DEFAULT_AVATAR, ...av });
+        setConfig(merged);
+        setSavedConfig(merged);
       }
     }
     setLoading(false);
@@ -228,7 +239,7 @@ export default function AvatarPage() {
     setSaving(true);
     await supabase
       .from("students")
-      .update({ avatar_data: config })
+      .update({ avatar_data: normalizeAvatarFull(config) })
       .eq("id", user!.id);
     setSavedConfig({ ...config });
     setSaving(false);
@@ -245,7 +256,8 @@ export default function AvatarPage() {
     tab === "character" ? CHARACTERS :
     tab === "hat" ? HATS :
     tab === "accessory" ? ACCESSORIES :
-    tab === "aura" ? AURAS : FRAMES;
+    tab === "aura" ? EQUIPMENT_BY_SLOT.aura.map(mapEquipItem) :
+    FRAMES;
 
   const currentValue: string =
     tab === "character" ? config.character :
@@ -329,9 +341,9 @@ export default function AvatarPage() {
           Відкрито: <span className="text-white font-bold">{unlockedCount}</span>/{currentItems.length}
         </span>
         <div className="flex gap-1">
-          {(["common","rare","epic","legendary"] as const).map(r => (
+          {(["common","uncommon","rare","epic","legendary"] as const).map(r => (
             <span key={r} className={`text-xs font-bold ${RARITY_LABEL_COLOR[r]}`}>
-              {r === "common" ? "⚪" : r === "rare" ? "🔵" : r === "epic" ? "🟣" : "🟠"}
+              {r === "common" ? "⚪" : r === "uncommon" ? "🟢" : r === "rare" ? "🔵" : r === "epic" ? "🟣" : "🟠"}
             </span>
           ))}
         </div>
