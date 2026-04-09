@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAuth } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase";
-import { getStudent } from "@/lib/student";
+import { getStudent, saveQuestionHistory } from "@/lib/student";
 import { getXPMultiplier, getSpeedBonus } from "@/lib/gamification";
 import { ChestPopup, rollChest, type ChestTier } from "@/components/chest-popup";
 import Link from "next/link";
@@ -126,6 +126,15 @@ export default function TestPage() {
     const speedBonus = correct ? getSpeedBonus(secondsTaken) : { bonusXP: 0 };
     const baseXP = q.difficulty === "hard" ? 30 : q.difficulty === "medium" ? 20 : 10;
     const earned = correct ? Math.round(baseXP * xpMult.multiplier) + speedBonus.bonusXP : 0;
+    if (user) {
+      void saveQuestionHistory({
+        userId: user.id,
+        questionId: q.id,
+        wasCorrect: correct,
+        mode: "test",
+        answerTimeSec: Math.max(1, secondsTaken),
+      });
+    }
     setTotalXP(p => p + earned);
     setAnswers(p => [...p, { correct, speedBonus: speedBonus.bonusXP }]);
   };

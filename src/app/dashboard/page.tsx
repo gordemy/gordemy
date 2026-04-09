@@ -565,24 +565,7 @@ export default function DashboardPage() {
       // Limit to 3 quests
       finalTasks = finalTasks.slice(0, 3);
 
-      // Reset daily boss if needed
-      const today = new Date().toISOString().split("T")[0];
       const s = st as any;
-
-      if (s.boss_daily_reset !== today && s.boss_daily_done) {
-        await supabase.from("students").update({ boss_daily_done: false, boss_daily_reset: today }).eq("id", user.id);
-        s.boss_daily_done = false;
-      }
-
-      // Reset weekly boss on Monday
-      const monday = (() => {
-        const d = new Date(); d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
-        return d.toISOString().split("T")[0];
-      })();
-      if (s.boss_weekly_reset !== monday && s.boss_weekly_done) {
-        await supabase.from("students").update({ boss_weekly_done: false, boss_weekly_reset: monday }).eq("id", user.id);
-        s.boss_weekly_done = false;
-      }
 
       setStudent(s);
       setTasks(finalTasks);
@@ -624,8 +607,12 @@ export default function DashboardPage() {
     } : prev);
   }, [user, student]);
 
-  // Start quests → go to learn page
-  const handleStart = () => router.push("/learn");
+  // Start quests from the first incomplete daily task
+  const handleStart = () => {
+    const nextTask = tasks.find(t => !t.completed);
+    if (!nextTask) return;
+    router.push(`/learn?task=${nextTask.id}`);
+  };
 
   if (authLoading || loading) {
     return (
@@ -648,8 +635,9 @@ export default function DashboardPage() {
 
   const chests = (student.chest_inventory || []).filter(c => !c.opened);
   const playerTitle = getPlayerTitle(student.level || 1, (student as any).total_tasks_completed || 0, student.streak || 0);
-  const bossDaily  = !!(student.boss_daily_done);
-  const bossWeekly = !!(student.boss_weekly_done);
+  const today = new Date().toISOString().split("T")[0];
+  const bossDaily  = student.boss_daily_reset === today;
+  const bossWeekly = student.boss_weekly_reset === today;
 
   return (
     <div className="max-w-[480px] mx-auto px-4 py-6 pb-24">

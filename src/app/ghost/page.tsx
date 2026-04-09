@@ -5,24 +5,17 @@ import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAuth } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase";
-import { getStudent, type Student, type Question } from "@/lib/student";
-import { CHARACTERS, AURA_STYLES, FRAME_STYLES, DEFAULT_AVATAR } from "@/lib/avatar";
+import { buildGhostQuestionPool } from "@/lib/ghost";
+import { getStudent, saveQuestionHistory, type Student, type Question } from "@/lib/student";
 import { getComboState } from "@/lib/gamification";
+import BattleCharacter, { type BattleCue } from "@/components/BattleCharacter";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-interface GhostAnswer { questionId: string; correct: boolean; subject: string; }
+interface GhostQuestionPlan { correct: boolean; responseSec: number; }
 interface AvatarData { character: string; hat: string; accessory: string; aura: string; frame: string; }
 
-type Phase =
-  | "loading"
-  | "intro"
-  | "battle"
-  | "hit-player"
-  | "hit-ghost"
-  | "win"
-  | "lose"
-  | "no-ghost";
+type Phase = "loading" | "intro" | "battle" | "win" | "lose" | "no-ghost";
 
 interface FighterState {
   hp: number;
@@ -33,7 +26,7 @@ interface FighterState {
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const QUESTIONS_PER_BATTLE = 7;
+const QUESTIONS_PER_BATTLE = 8;
 const BASE_DAMAGE = 20;
 const BASE_HP = 100;
 
@@ -54,10 +47,12 @@ function HitFlash({ color }: { color: string }) {
 
 function FighterCard({
   label, emoji, hp, maxHp, combo, score, isPlayer, shaking, color,
+  battleCue,
 }: {
   label: string; emoji: string; hp: number; maxHp: number;
   combo: number; score: number; isPlayer: boolean;
   shaking: boolean; color: string;
+  battleCue?: BattleCue | null;
 }) {
   const hpPct = Math.max(0, Math.min(100, (hp / maxHp) * 100));
   const hpColor = hpPct > 60 ? "from-green-500 to-green-400"
@@ -76,9 +71,17 @@ function FighterCard({
       {/* Character */}
       <motion.div
         animate={!isPlayer ? { scaleX: -1 } : {}}
-        className="text-5xl select-none"
+        className="flex h-[5.5rem] items-center justify-center select-none"
       >
-        {emoji}
+        {isPlayer ? (
+          <BattleCharacter
+            cue={battleCue ?? null}
+            comboCount={combo}
+            className="scale-[0.85]"
+          />
+        ) : (
+          <span className="text-5xl">{emoji}</span>
+        )}
       </motion.div>
 
       {/* HP Bar */}
@@ -98,7 +101,7 @@ function FighterCard({
 
       {/* Combo + Score */}
       <div className="flex gap-2 text-[10px]">
-        {combo > 1 && (
+        {!isPlayer && combo > 1 && (
           <span className="font-black text-yellow-400">×{combo} COMBO</span>
         )}
         <span className="text-gordemy-muted">⚡{score}</span>
@@ -182,7 +185,7 @@ export default function GhostBattlePage() {
   const [phase, setPhase] = useState<Phase>("loading");
   const [student, setStudent] = useState<Student & { avatar_data?: AvatarData; gems?: number; xp?: number } | null>(null);
   const [questions, setQuestions] = useState<Question[]>([]);
-  const [ghostAnswers, setGhostAnswers] = useState<GhostAnswer[]>([]);
+  const [ghostPlan, setGhostPlan] = useState<GhostQuestionPlan[]>([]);
   const [qIndex, setQIndex] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
   const [player, setPlayer] = useState<FighterState>({ hp: BASE_HP, maxHp: BASE_HP, combo: 0, score: 0 });
@@ -192,7 +195,11 @@ export default function GhostBattlePage() {
   const [flashColor, setFlashColor]   = useState("");
   const [battleEffect, setBattleEffect] = useState<"punch" | "win" | "lose" | null>(null);
   const [timeLeft, setTimeLeft] = useState(15);
+  const [rewardDoneToday, setRewardDoneToday] = useState(false);
+  const [rewardGrantedInFight, setRewardGrantedInFight] = useState(false);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const battleCueNonce = useRef(0);
+  const [playerBattleCue, setPlayerBattleCue] = useState<BattleCue | null>(null);
 
   // Load data
   useEffect(() => {
@@ -202,37 +209,94 @@ export default function GhostBattlePage() {
       if (!st) { router.replace("/dashboard"); return; }
       setStudent(st as any);
 
-      // Load yesterday ghost answers
+      // Rule 1: account older than 1 day + any activity yesterday
+      const today = new Date().toISOString().split("T")[0];
+      const { data: studentMeta } = await supabase
+        .from("students")
+        .select("created_at,last_active_date,ghost_reward_reset")
+        .eq("id", user.id)
+        .single();
+      if (studentMeta?.ghost_reward_reset === today) setRewardDoneToday(true);
+      const createdAt = studentMeta?.created_at ? new Date(studentMeta.created_at) : null;
+      const accountOlderThanDay = createdAt ? Date.now() - createdAt.getTime() >= 24 * 3600 * 1000 : false;
+
       const yesterday = new Date();
       yesterday.setDate(yesterday.getDate() - 1);
       const yStr = yesterday.toISOString().split("T")[0];
-
-      const { data: ghostData } = await supabase
-        .from("task_answers")
-        .select("question_id, correct, subject")
+      const { count: activityCount } = await supabase
+        .from("tasks")
+        .select("id", { count: "exact", head: true })
         .eq("student_id", user.id)
-        .gte("answered_at", `${yStr}T00:00:00`)
-        .lte("answered_at", `${yStr}T23:59:59`)
-        .limit(QUESTIONS_PER_BATTLE);
-
-      if (!ghostData || ghostData.length < 3) {
+        .eq("date", yStr)
+        .eq("completed", true);
+      const hadActivityYesterday = (activityCount || 0) > 0 || studentMeta?.last_active_date === yStr;
+      if (!accountOlderThanDay || !hadActivityYesterday) {
         setPhase("no-ghost");
         return;
       }
 
-      const ghostIds = ghostData.map((g: any) => g.question_id);
+      // Load yesterday snapshot (or reconstruct from yesterday tasks as fallback)
+      let { data: snapshot } = await supabase
+        .from("ghost_snapshots")
+        .select("correct_answers,answers_count,avg_response_sec,xp_earned")
+        .eq("student_id", user.id)
+        .eq("date", yStr)
+        .maybeSingle();
+
+      if (!snapshot) {
+        const { data: yTasks } = await supabase
+          .from("tasks")
+          .select("is_correct,response_time_sec")
+          .eq("student_id", user.id)
+          .eq("date", yStr)
+          .eq("completed", true);
+        const rows = yTasks || [];
+        const answersCount = rows.length;
+        const correctAnswers = rows.filter((r: any) => r.is_correct).length;
+        const speeds = rows
+          .map((r: any) => Number(r.response_time_sec))
+          .filter((v: number) => Number.isFinite(v) && v > 0);
+        const avgResponse = speeds.length
+          ? Math.round(speeds.reduce((a: number, b: number) => a + b, 0) / speeds.length)
+          : 12;
+        snapshot = {
+          correct_answers: correctAnswers,
+          answers_count: answersCount,
+          avg_response_sec: avgResponse,
+          xp_earned: correctAnswers * 20,
+        };
+      }
+
+      const answersCount = Math.max(1, Number(snapshot?.answers_count || 0));
+      const correctAnswers = Math.max(0, Number(snapshot?.correct_answers || 0));
+      const correctRate = Math.max(0.15, Math.min(0.95, correctAnswers / answersCount));
+      const avgResponseSec = Math.max(4, Math.min(15, Number(snapshot?.avg_response_sec || 12)));
+
+      // Build smart mixed pool from history:
+      // - up to 2 wrong-history questions (yesterday first, then older)
+      // - the rest from previously correct questions.
+      const poolIds = await buildGhostQuestionPool(user.id, QUESTIONS_PER_BATTLE);
+      if (poolIds.length === 0) {
+        setPhase("no-ghost");
+        return;
+      }
       const { data: qs } = await supabase
         .from("questions")
         .select("*")
-        .in("id", ghostIds)
-        .limit(QUESTIONS_PER_BATTLE);
+        .in("id", poolIds);
+      const byId = new Map((qs || []).map((q: any) => [q.id, q]));
+      const pool = poolIds.map(id => byId.get(id)).filter(Boolean).slice(0, QUESTIONS_PER_BATTLE) as Question[];
+      if (pool.length === 0) {
+        setPhase("no-ghost");
+        return;
+      }
 
-      setGhostAnswers(ghostData.map((g: any) => ({
-        questionId: g.question_id,
-        correct: g.correct,
-        subject: g.subject,
-      })));
-      setQuestions((qs || []).slice(0, QUESTIONS_PER_BATTLE));
+      const plan = pool.map(() => ({
+        correct: Math.random() < correctRate,
+        responseSec: Math.max(2, Math.round(avgResponseSec + (Math.random() * 4 - 2))),
+      }));
+      setGhostPlan(plan);
+      setQuestions(pool as Question[]);
       setPhase("intro");
     })();
   }, [user, router]);
@@ -270,14 +334,33 @@ export default function GhostBattlePage() {
 
     setSelected(choice || "");
     const playerCorrect = choice !== null && parseInt(choice) === q.correct_answer;
-    const ghostGa = ghostAnswers.find(g => g.questionId === q.id);
-    const ghostCorrect = ghostGa?.correct ?? false;
+    const ghostCurrent = ghostPlan[qIndex];
+    const ghostCorrect = ghostCurrent?.correct ?? false;
+    const secondsTaken = 15 - timeLeft;
+    if (user) {
+      void saveQuestionHistory({
+        userId: user.id,
+        questionId: q.id,
+        wasCorrect: playerCorrect,
+        mode: "ghost",
+        answerTimeSec: Math.max(1, secondsTaken),
+      });
+    }
 
     // Calculate damage
     const playerCombo = playerCorrect ? player.combo + 1 : 0;
-    const ghostCombo  = ghostCorrect  ? ghost.combo  + 1 : 0;
+    const ghostCombo  = ghostCorrect  ? ghost.combo + 1 : 0;
     const playerDmg   = playerCorrect ? Math.round(BASE_DAMAGE * (1 + playerCombo * 0.25)) : 0;
     const ghostDmg    = ghostCorrect  ? Math.round(BASE_DAMAGE * (1 + ghostCombo  * 0.25)) : 0;
+    const nextPlayerScore = player.score + (playerCorrect ? 1 : 0);
+    const nextGhostScore = ghost.score + (ghostCorrect ? 1 : 0);
+    const nextPlayerHp = Math.max(0, player.hp - (ghostCorrect ? ghostDmg : 0));
+    const nextGhostHp = Math.max(0, ghost.hp - (playerCorrect ? playerDmg : 0));
+
+    setPlayerBattleCue({
+      kind: playerCorrect ? "attack" : "hit",
+      nonce: ++battleCueNonce.current,
+    });
 
     if (playerCorrect) {
       // Player hits ghost
@@ -287,32 +370,33 @@ export default function GhostBattlePage() {
       setTimeout(() => setFlashColor(""), 300);
       setShakeGhost(true);
       setTimeout(() => setShakeGhost(false), 350);
-      setGhost(prev => ({ ...prev, hp: prev.hp - playerDmg, combo: ghostCombo, score: prev.score + (ghostCorrect ? 1 : 0) }));
-      setPlayer(prev => ({ ...prev, combo: playerCombo, score: prev.score + 1 }));
+      setGhost(prev => ({ ...prev, hp: nextGhostHp, combo: ghostCombo, score: nextGhostScore }));
+      setPlayer(prev => ({ ...prev, combo: playerCombo, score: nextPlayerScore }));
     } else {
       // Ghost hits player
       setFlashColor("bg-red-500/20");
       setTimeout(() => setFlashColor(""), 300);
       setShakePlayer(true);
       setTimeout(() => setShakePlayer(false), 350);
-      setPlayer(prev => ({ ...prev, combo: 0 }));
+      setPlayer(prev => ({ ...prev, combo: 0, score: nextPlayerScore }));
+      setGhost(prev => ({ ...prev, combo: ghostCombo, score: nextGhostScore }));
     }
 
     if (ghostCorrect) {
-      setPlayer(prev => ({ ...prev, hp: prev.hp - ghostDmg }));
+      setPlayer(prev => ({ ...prev, hp: nextPlayerHp }));
     }
 
     // Next question after delay
     setTimeout(() => {
       const nextIdx = qIndex + 1;
       if (nextIdx >= questions.length) {
-        endBattle(playerCorrect ? player.score + 1 : player.score, ghost.score);
+        endBattle(nextPlayerScore, nextGhostScore);
       } else {
         setQIndex(nextIdx);
         setPhase("battle");
       }
     }, 1200);
-  }, [qIndex, questions, ghostAnswers, player, ghost, selected]); // eslint-disable-line
+  }, [qIndex, questions, ghostPlan, player, ghost, selected, timeLeft, user]); // eslint-disable-line
 
   const endBattle = useCallback(async (finalPlayerScore: number, finalGhostScore: number) => {
     const playerWon = finalPlayerScore >= finalGhostScore;
@@ -320,9 +404,11 @@ export default function GhostBattlePage() {
 
     if (!user || !student) return;
 
-    // Grant rewards + chest
+    // Unlimited replays, but chest reward only once per day after first win.
     const xpGain = playerWon ? 80 : 20;
-    const gemsGain = playerWon ? 10 : 2;
+    const shouldGrantDailyReward = playerWon && !rewardDoneToday;
+    setRewardGrantedInFight(shouldGrantDailyReward);
+    const gemsGain = shouldGrantDailyReward ? 10 : 0;
 
     // Add chest to inventory
     const tier = playerWon
@@ -342,17 +428,24 @@ export default function GhostBattlePage() {
     const { data: fresh } = await supabase.from("students").select("chest_inventory, xp, gems").eq("id", user.id).single();
     const inv = Array.isArray(fresh?.chest_inventory) ? fresh.chest_inventory : [];
 
-    await supabase.from("students").update({
-      xp:   (fresh?.xp   || 0) + xpGain,
+    const today = new Date().toISOString().split("T")[0];
+    const update: Record<string, unknown> = {
+      xp: (fresh?.xp || 0) + xpGain,
       gems: (fresh?.gems || 0) + gemsGain,
-      chest_inventory: [...inv, newChest],
-    }).eq("id", user.id);
+    };
+    if (shouldGrantDailyReward) {
+      update.chest_inventory = [...inv, newChest];
+      update.ghost_reward_done = true;
+      update.ghost_reward_reset = today;
+      setRewardDoneToday(true);
+    }
+    await supabase.from("students").update(update).eq("id", user.id);
 
     setTimeout(() => {
       setBattleEffect(null);
       setPhase(playerWon ? "win" : "lose");
     }, 2000);
-  }, [user, student, questions.length]);
+  }, [user, student, questions.length, rewardDoneToday]);
 
   if (authLoading || phase === "loading") {
     return (
@@ -363,21 +456,17 @@ export default function GhostBattlePage() {
     );
   }
 
-  // Avatar
-  const avatarData: AvatarData = { ...DEFAULT_AVATAR, ...(student?.avatar_data || {}) };
-  const char = CHARACTERS.find(c => c.id === avatarData.character) || CHARACTERS[0];
-  const aura = AURA_STYLES[avatarData.aura as keyof typeof AURA_STYLES] ?? "";
 
   const q = questions[qIndex];
-  const ghostGa = q ? ghostAnswers.find(g => g.questionId === q.id) : null;
+  const ghostGa = q ? ghostPlan[qIndex] : null;
 
   // ── NO GHOST ──
   if (phase === "no-ghost") {
     return (
       <div className="max-w-md mx-auto px-4 py-16 text-center">
         <div className="text-6xl mb-4">👻</div>
-        <h1 className="text-2xl font-black text-white mb-3">Привид не знайдений</h1>
-        <p className="text-gordemy-muted mb-8">Зіграй хоча б 3 завдання сьогодні, щоб завтра можна було битися зі своїм привидом!</p>
+        <h1 className="text-2xl font-black text-white mb-3">Поки що нема привида</h1>
+        <p className="text-gordemy-muted mb-8">Зіграй хоча б 1 гру сьогодні, щоб завтра битися зі своїм привидом</p>
         <button onClick={() => router.push("/dashboard")}
           className="px-6 py-3 rounded-2xl bg-gordemy-purple text-white font-bold">
           На головну
@@ -394,20 +483,27 @@ export default function GhostBattlePage() {
           className="text-7xl mb-6">👻</motion.div>
         <h1 className="text-3xl font-black text-white mb-2">БИТВА З СОБОЮ</h1>
         <p className="text-gordemy-muted mb-2">Ти проти <span className="text-cyan-400 font-bold">вчорашнього себе</span></p>
+        {rewardDoneToday && (
+          <div className="inline-flex mb-2 px-3 py-1 rounded-full border border-gordemy-green/40 bg-gordemy-green/10 text-gordemy-green text-xs font-black tracking-wider">
+            DONE
+          </div>
+        )}
         <p className="text-gordemy-muted text-sm mb-8">{questions.length} питань · Відповідай швидко · Комбо множить урон</p>
 
         <div className="flex gap-6 mb-10 w-full justify-center">
           <div className="text-center">
-            <div className={`w-20 h-20 rounded-full flex items-center justify-center border-4 border-gordemy-blue ${aura} mx-auto`}>
-              <span className="text-4xl">{char.emoji}</span>
+            <div className="mx-auto flex h-24 w-24 items-center justify-center rounded-full border-4 border-gordemy-blue bg-gordemy-card/50 shadow-[0_0_24px_rgba(99,102,241,0.25)]">
+              <BattleCharacter className="scale-[0.7]" />
             </div>
             <div className="text-white font-bold mt-2 text-sm">Ти</div>
             <div className="text-gordemy-blue text-xs">Сьогодні</div>
           </div>
           <div className="flex items-center text-3xl font-black text-gordemy-orange">VS</div>
           <div className="text-center">
-            <div className="w-20 h-20 rounded-full flex items-center justify-center border-4 border-gray-500 bg-gray-800/50 mx-auto">
-              <span className="text-4xl opacity-60">{char.emoji}</span>
+            <div className="mx-auto flex h-24 w-24 items-center justify-center rounded-full border-4 border-gray-500 bg-gray-800/50">
+              <div className="scale-[0.7] opacity-50 grayscale">
+                <BattleCharacter flipped />
+              </div>
             </div>
             <div className="text-gray-400 font-bold mt-2 text-sm">Привид</div>
             <div className="text-gray-500 text-xs">Вчора</div>
@@ -455,9 +551,10 @@ export default function GhostBattlePage() {
 
         {/* Fighters */}
         <div className="flex gap-3 mb-4">
-          <FighterCard label="ТИ" emoji={char.emoji} hp={player.hp} maxHp={BASE_HP}
-            combo={player.combo} score={player.score} isPlayer color="border-gordemy-blue/40" shaking={shakePlayer} />
-          <FighterCard label="ПРИВИД" emoji={char.emoji} hp={ghost.hp} maxHp={BASE_HP}
+          <FighterCard label="ТИ" emoji="👻" hp={player.hp} maxHp={BASE_HP}
+            combo={player.combo} score={player.score} isPlayer color="border-gordemy-blue/40" shaking={shakePlayer}
+            battleCue={playerBattleCue} />
+          <FighterCard label="ПРИВИД" emoji="👻" hp={ghost.hp} maxHp={BASE_HP}
             combo={ghost.combo} score={ghost.score} isPlayer={false} color="border-gray-500/40" shaking={shakeGhost} />
         </div>
 
@@ -482,7 +579,7 @@ export default function GhostBattlePage() {
         {/* Ghost hint */}
         {ghostGa && (
           <div className="text-center text-[10px] text-gordemy-muted mb-2">
-            👻 Вчора ти відповів {ghostGa.correct ? "✅ правильно" : "❌ неправильно"}
+            👻 Привид відповість {ghostGa.correct ? "✅ правильно" : "❌ неправильно"} приблизно за {ghostGa.responseSec}с
           </div>
         )}
 
@@ -542,8 +639,8 @@ export default function GhostBattlePage() {
         </div>
         <div className="bg-gordemy-card border border-gordemy-border rounded-2xl p-4 mb-8 w-full">
           <div className="text-gordemy-green font-bold">+80 XP</div>
-          <div className="text-yellow-300 font-bold">+10 💎</div>
-          <div className="text-gordemy-blue text-sm mt-2">🎁 Сундук додано в інвентар!</div>
+          <div className="text-yellow-300 font-bold">+{rewardGrantedInFight ? 10 : 0} 💎</div>
+          <div className="text-gordemy-blue text-sm mt-2">{rewardGrantedInFight ? "🎁 Сундук додано в інвентар!" : "DONE"}</div>
         </div>
         <button onClick={() => router.push("/dashboard")}
           className="w-full py-4 rounded-2xl bg-gradient-to-r from-gordemy-green to-gordemy-blue text-white font-black text-lg">
@@ -569,7 +666,7 @@ export default function GhostBattlePage() {
       </div>
       <div className="bg-gordemy-card border border-gordemy-border rounded-2xl p-4 mb-8 w-full">
         <div className="text-gordemy-muted font-bold">+20 XP (за участь)</div>
-        <div className="text-gordemy-blue text-sm mt-2">🎁 Звичайний сундук додано!</div>
+        <div className="text-gordemy-blue text-sm mt-2">Без нагороди сундука</div>
       </div>
       <div className="flex gap-3 w-full">
         <button onClick={() => { setPhase("intro"); setQIndex(0); setSelected(null); setPlayer({ hp: BASE_HP, maxHp: BASE_HP, combo: 0, score: 0 }); setGhost({ hp: BASE_HP, maxHp: BASE_HP, combo: 0, score: 0 }); }}

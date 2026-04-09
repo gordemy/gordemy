@@ -7,16 +7,27 @@ import { useAuth } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase";
 import { getStudent } from "@/lib/student";
 import { getXPMultiplier, getSpeedBonus } from "@/lib/gamification";
+import {
+  calculateWeakProgress,
+  getWeakTopics,
+  isWeakAreaCompleted,
+  loadWeakAreaStats,
+  recordCorrect,
+  recordMistake,
+  saveUserStats,
+  type WeakAreaStat,
+} from "@/lib/weak-areas";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface TopicStat {
+  topic_id: string;
   topic: string;
   subject: string;
-  total: number;
-  correct: number;
-  accuracy: number;
-  avgTime: number;
+  mistake_count: number;
+  correct_count: number;
+  completion_progress: number;
+  last_updated?: string;
 }
 
 interface Question {
@@ -49,6 +60,36 @@ const TIME_PER_Q = 30;
 const TRAINING_QUESTIONS = 5;
 
 type Phase = "analysis" | "training" | "result";
+
+function RewardOverlay({
+  open,
+  chestTier,
+  onClose,
+}: {
+  open: boolean;
+  chestTier: "common" | "rare" | "epic" | "legendary";
+  onClose: () => void;
+}) {
+  if (!open) return null;
+  const chestEmoji = chestTier === "legendary" ? "🌟" : chestTier === "epic" ? "🔮" : chestTier === "rare" ? "💠" : "📦";
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm px-6">
+      <motion.div initial={{ scale: 0.6, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="w-full max-w-md rounded-3xl border border-gordemy-green/40 bg-gordemy-card p-8 text-center relative overflow-hidden">
+        <motion.div animate={{ opacity: [0.2, 0.5, 0.2] }} transition={{ repeat: Infinity, duration: 2 }} className="absolute inset-0 bg-gradient-to-br from-gordemy-green/20 via-gordemy-blue/10 to-gordemy-purple/20" />
+        <div className="relative z-10">
+          <motion.div animate={{ scale: [1, 1.15, 1], rotate: [0, -4, 4, 0] }} transition={{ duration: 0.8 }} className="text-7xl mb-4">
+            {chestEmoji}
+          </motion.div>
+          <div className="text-2xl font-black text-gordemy-green mb-2">Всі слабкі місця прокачані!</div>
+          <div className="text-gordemy-muted mb-6">Ти закрив усі слабкі теми цього циклу.</div>
+          <button onClick={onClose} className="w-full py-3 rounded-xl bg-gradient-to-r from-gordemy-blue to-gordemy-purple text-white font-black">
+            Забрати нагороду
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
 
 function AccuracyRing({ value }: { value: number }) {
   const color = value >= 80 ? "#22c55e" : value >= 50 ? "#3b82f6" : "#f97316";
@@ -94,6 +135,8 @@ export default function WeakSpotPage() {
   const [timeLeft, setTimeLeft] = useState(TIME_PER_Q);
   const [answers, setAnswers] = useState<{ correct: boolean; xp: number }[]>([]);
   const [totalXP, setTotalXP] = useState(0);
+  const [showReward, setShowReward] = useState(false);
+  const [rewardChestTier, setRewardChestTier] = useState<"common" | "rare" | "epic" | "legendary">("rare");
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startTimeRef = useRef<number>(0);
@@ -115,51 +158,56 @@ export default function WeakSpotPage() {
 
   async function analyzeWeakSpots(subjects: string[]) {
     setAnalyzing(true);
-    // Get last 200 task answers for the student
-    const { data: tasks } = await supabase
-      .from("tasks")
-      .select("subject, is_correct, question:questions(topic)")
-      .eq("student_id", user!.id)
-      .not("is_correct", "is", null)
-      .in("subject", subjects)
-      .order("date", { ascending: false })
-      .limit(200);
+    let stored = await loadWeakAreaStats(user!.id);
+    let filtered = stored.filter(s => subjects.includes(s.subject));
 
-    if (!tasks || tasks.length === 0) {
+    // Bootstrap weak areas from existing completed tasks for users
+    // who had activity before weak_areas storage was introduced.
+    if (filtered.length === 0) {
+      const { data: tasks } = await supabase
+        .from("tasks")
+        .select("subject,is_correct,question:questions(topic)")
+        .eq("student_id", user!.id)
+        .not("is_correct", "is", null)
+        .in("subject", subjects)
+        .order("date", { ascending: false })
+        .limit(500);
+
+      const rows = (tasks || []) as any[];
+      if (rows.length > 0) {
+        const map: Record<string, { subject: string; topic: string; wrong_count: number; correct_count: number }> = {};
+        for (const t of rows) {
+          const topic = t.question?.topic || "Загальна тема";
+          const topicId = `${t.subject}::${topic}`;
+          if (!map[topicId]) {
+            map[topicId] = { subject: t.subject, topic, wrong_count: 0, correct_count: 0 };
+          }
+          if (t.is_correct) map[topicId].correct_count += 1;
+          else map[topicId].wrong_count += 1;
+        }
+
+        const bootstrapStats: TopicStat[] = Object.entries(map).map(([topic_id, v]) => ({
+          topic_id,
+          subject: v.subject,
+          topic: v.topic,
+          mistake_count: v.wrong_count,
+          correct_count: v.correct_count,
+          completion_progress: calculateWeakProgress({ mistake_count: v.wrong_count, correct_count: v.correct_count }),
+        }));
+        await saveWeakSnapshot(bootstrapStats);
+        stored = await loadWeakAreaStats(user!.id);
+        filtered = stored.filter(s => subjects.includes(s.subject));
+      }
+    }
+
+    if (filtered.length === 0) {
       setStats([]);
       setWeakSpots([]);
       setAnalyzing(false);
       return;
     }
-
-    // Group by subject+topic
-    const map: Record<string, { total: number; correct: number; subject: string }> = {};
-    for (const t of tasks as any[]) {
-      const topic = t.question?.topic || "Загальна тема";
-      const key = `${t.subject}::${topic}`;
-      if (!map[key]) map[key] = { total: 0, correct: 0, subject: t.subject };
-      map[key].total++;
-      if (t.is_correct) map[key].correct++;
-    }
-
-    const allStats: TopicStat[] = Object.entries(map)
-      .filter(([, v]) => v.total >= 2) // at least 2 attempts
-      .map(([key, v]) => {
-        const [subject, topic] = key.split("::");
-        return {
-          topic,
-          subject,
-          total: v.total,
-          correct: v.correct,
-          accuracy: Math.round((v.correct / v.total) * 100),
-          avgTime: 0,
-        };
-      })
-      .sort((a, b) => a.accuracy - b.accuracy);
-
-    setStats(allStats);
-    // Weak = accuracy < 65%
-    setWeakSpots(allStats.filter(s => s.accuracy < 65).slice(0, 6));
+    setStats(filtered as TopicStat[]);
+    setWeakSpots(getWeakTopics(filtered as WeakAreaStat[]).slice(0, 8) as TopicStat[]);
     setAnalyzing(false);
   }
 
@@ -185,7 +233,8 @@ export default function WeakSpotPage() {
       pool = (more || []) as Question[];
     }
 
-    const shuffled = pool.sort(() => Math.random() - 0.5).slice(0, TRAINING_QUESTIONS);
+    const deduped = Array.from(new Map(pool.map(q => [q.id, q])).values());
+    const shuffled = deduped.sort(() => Math.random() - 0.5).slice(0, TRAINING_QUESTIONS);
     setQuestions(shuffled);
     setCurrentQ(0);
     setAnswers([]);
@@ -227,6 +276,12 @@ export default function WeakSpotPage() {
     setAnswers(newAnswers);
     setTotalXP(prev => prev + xp);
 
+    // Persist immediately after each answer.
+    const topicPayload = { topic_id: `${q.subject}::${q.topic}`, subject: q.subject, topic: q.topic };
+    if (correct) await recordCorrect(user!.id, topicPayload);
+    else await recordMistake(user!.id, topicPayload);
+    await updateWeakAreas();
+
     setTimeout(async () => {
       if (currentQ + 1 < questions.length) {
         setCurrentQ(prev => prev + 1);
@@ -244,6 +299,63 @@ export default function WeakSpotPage() {
         setPhase("result");
       }
     }, 1400);
+  }
+
+  async function updateWeakAreas() {
+    const latest = await loadWeakAreaStats(user!.id);
+    const normalized = (latest as any[]).map((s: any) => ({
+      ...s,
+      completion_progress: calculateWeakProgress({ mistake_count: s.mistake_count, correct_count: s.correct_count }),
+    })) as TopicStat[];
+    setStats(normalized);
+    setWeakSpots(getWeakTopics(normalized as WeakAreaStat[]).slice(0, 8) as TopicStat[]);
+    await maybeTriggerWeakReward(normalized);
+  }
+
+  async function saveWeakSnapshot(nextStats: TopicStat[]) {
+    await saveUserStats(
+      user!.id,
+      nextStats.map(s => ({
+        topic_id: s.topic_id,
+        subject: s.subject,
+        topic: s.topic,
+        mistake_count: s.mistake_count,
+        correct_count: s.correct_count,
+        last_updated: s.last_updated,
+      }))
+    );
+  }
+
+  async function maybeTriggerWeakReward(nextStats: TopicStat[]) {
+    const weak = getWeakTopics(nextStats as WeakAreaStat[]);
+    if (nextStats.length === 0 || weak.length > 0) return;
+    const today = new Date().toISOString().split("T")[0];
+    const { data: stu } = await supabase
+      .from("students")
+      .select("xp,chest_inventory,weak_reward_reset")
+      .eq("id", user!.id)
+      .single();
+    if (stu?.weak_reward_reset === today) return;
+    const now = new Date();
+    const chestTier: "common" | "rare" | "epic" | "legendary" = "epic";
+    const chest = {
+      id: `weak-${Date.now()}`,
+      tier: chestTier,
+      earnedAt: now.toISOString(),
+      unlockAt: new Date(now.getTime() + 12 * 3600000).toISOString(),
+      opened: false,
+    };
+    const inv = Array.isArray(stu?.chest_inventory) ? stu.chest_inventory : [];
+    await supabase
+      .from("students")
+      .update({
+        xp: (stu?.xp || 0) + 120,
+        chest_inventory: [...inv, chest],
+        weak_reward_reset: today,
+      })
+      .eq("id", user!.id);
+    setRewardChestTier(chestTier);
+    setShowReward(true);
   }
 
   // ─── Loading ──────────────────────────────────────────────────────────────
@@ -274,6 +386,7 @@ export default function WeakSpotPage() {
 
     return (
       <div className="max-w-[600px] mx-auto px-6 py-8">
+        <RewardOverlay open={showReward} chestTier={rewardChestTier} onClose={() => setShowReward(false)} />
         {/* Header */}
         <div className="flex items-center gap-3 mb-5">
           <div className="text-2xl">🎯</div>
@@ -354,11 +467,14 @@ export default function WeakSpotPage() {
 
   if (phase === "result") {
     const correct = answers.filter(a => a.correct).length;
-    const accuracy = Math.round((correct / answers.length) * 100);
-    const improved = selectedWeakSpot ? accuracy > selectedWeakSpot.accuracy : false;
+    const accuracy = Math.round((correct / Math.max(1, answers.length)) * 100);
+    const beforeProgress = selectedWeakSpot?.completion_progress || 0;
+    const afterTopic = stats.find(s => s.topic_id === selectedWeakSpot?.topic_id);
+    const improved = (afterTopic?.completion_progress || 0) > beforeProgress;
 
     return (
       <div className="max-w-[500px] mx-auto px-6 py-12 text-center">
+        <RewardOverlay open={showReward} chestTier={rewardChestTier} onClose={() => setShowReward(false)} />
         <motion.div initial={{ scale: 0.7, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ type: "spring" }}>
           <div className="text-7xl mb-4">{accuracy >= 80 ? "🎯" : accuracy >= 60 ? "📈" : "💪"}</div>
           <h1 className="text-3xl font-black text-white mb-2">
@@ -387,7 +503,7 @@ export default function WeakSpotPage() {
         {improved && (
           <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="bg-gordemy-green/10 border border-gordemy-green/30 rounded-2xl p-4 mb-6">
             <div className="text-gordemy-green font-bold">📈 Прогрес зафіксовано!</div>
-            <div className="text-gordemy-muted text-sm">Твій результат покращився з {selectedWeakSpot?.accuracy}% до {accuracy}%</div>
+            <div className="text-gordemy-muted text-sm">Прогрес теми зріс з {beforeProgress}% до {afterTopic?.completion_progress || beforeProgress}%</div>
           </motion.div>
         )}
 
@@ -411,10 +527,11 @@ export default function WeakSpotPage() {
 
   // ─── Analysis Phase ───────────────────────────────────────────────────────
 
-  const strongSpots = stats.filter(s => s.accuracy >= 80).slice(0, 4);
+  const strongSpots = stats.filter(s => isWeakAreaCompleted(s)).slice(0, 4);
 
   return (
     <div className="max-w-[600px] mx-auto px-6 py-8">
+      <RewardOverlay open={showReward} chestTier={rewardChestTier} onClose={() => setShowReward(false)} />
       {/* Header */}
       <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
         <h1 className="text-3xl font-black text-white flex items-center gap-2">🎯 Слабкі місця</h1>
@@ -440,7 +557,7 @@ export default function WeakSpotPage() {
         <div className="mb-8">
           <div className="flex items-center gap-2 mb-4">
             <span className="text-gordemy-orange font-bold">⚠️ Слабкі місця ({weakSpots.length})</span>
-            <span className="text-xs text-gordemy-muted">— точність менше 65%</span>
+            <span className="text-xs text-gordemy-muted">— де помилок більше, ніж правильних</span>
           </div>
           <div className="space-y-3">
             {weakSpots.map((spot, i) => (
@@ -452,14 +569,14 @@ export default function WeakSpotPage() {
                 className="bg-gordemy-card border border-gordemy-orange/20 rounded-2xl p-5 hover:border-gordemy-orange/40 transition-all"
               >
                 <div className="flex items-center gap-4">
-                  <AccuracyRing value={spot.accuracy} />
+                  <AccuracyRing value={spot.completion_progress} />
                   <div className="flex-1">
                     <div className="font-bold text-white text-sm mb-0.5">{spot.topic}</div>
                     <div className="flex items-center gap-2">
                       <span className={`text-xs px-2 py-0.5 rounded-full border font-semibold ${SUBJECT_COLORS[spot.subject] || ""}`}>
                         {SUBJECT_NAMES[spot.subject] || spot.subject}
                       </span>
-                      <span className="text-xs text-gordemy-muted">{spot.total} спроб</span>
+                      <span className="text-xs text-gordemy-muted">{spot.correct_count + spot.mistake_count} спроб</span>
                     </div>
                   </div>
                   <button
@@ -474,10 +591,10 @@ export default function WeakSpotPage() {
                   <div className="flex-1 h-1.5 bg-gordemy-border rounded-full overflow-hidden">
                     <div
                       className="h-full bg-gordemy-orange rounded-full"
-                      style={{ width: `${spot.accuracy}%` }}
+                      style={{ width: `${spot.completion_progress}%` }}
                     />
                   </div>
-                  <span className="text-xs text-gordemy-muted">{spot.correct}/{spot.total}</span>
+                  <span className="text-xs text-gordemy-muted">{spot.correct_count}/{spot.mistake_count} fixed</span>
                 </div>
               </motion.div>
             ))}
@@ -498,7 +615,7 @@ export default function WeakSpotPage() {
                 className="bg-gordemy-card border border-gordemy-green/20 rounded-xl p-4"
               >
                 <div className="flex items-center gap-2 mb-1">
-                  <AccuracyRing value={spot.accuracy} />
+                  <AccuracyRing value={spot.completion_progress} />
                   <div className="flex-1 min-w-0">
                     <div className="font-semibold text-white text-sm truncate">{spot.topic}</div>
                     <div className="text-xs text-gordemy-muted">{SUBJECT_NAMES[spot.subject]}</div>

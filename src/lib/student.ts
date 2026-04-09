@@ -46,6 +46,7 @@ export interface Task {
   answer_given: number | null;
   is_correct: boolean | null;
   completed_at: string | null;
+  response_time_sec?: number | null;
 }
 
 export interface Question {
@@ -57,6 +58,25 @@ export interface Question {
   options: string[];
   correct_answer: number;
   explanation: string | null;
+}
+
+export async function saveQuestionHistory(params: {
+  userId: string;
+  questionId: string;
+  wasCorrect: boolean;
+  mode: string;
+  answerTimeSec?: number | null;
+  date?: string;
+}): Promise<void> {
+  const day = params.date || new Date().toISOString().split("T")[0];
+  await supabase.from("question_history").insert({
+    user_id: params.userId,
+    question_id: params.questionId,
+    date: day,
+    was_correct: params.wasCorrect,
+    mode: params.mode,
+    answer_time_sec: params.answerTimeSec ?? null,
+  });
 }
 
 export async function getStudent(userId: string): Promise<Student | null> {
@@ -196,7 +216,8 @@ export async function completeTask(
   taskId: string,
   answerGiven: number,
   isCorrect: boolean,
-  xpReward: number
+  xpReward: number,
+  secondsTaken?: number
 ): Promise<{ newXp: number; newStreak: number; levelUp: boolean; newAchievements: Achievement[] }> {
   const now = new Date();
   const today = now.toISOString().split("T")[0];
@@ -209,10 +230,27 @@ export async function completeTask(
       answer_given: answerGiven,
       is_correct: isCorrect,
       completed_at: now.toISOString(),
+      response_time_sec: typeof secondsTaken === "number" ? secondsTaken : null,
     })
     .eq("id", taskId);
 
   if (taskError) console.error("Complete task error:", taskError);
+
+  const { data: taskRow } = await supabase
+    .from("tasks")
+    .select("question_id")
+    .eq("id", taskId)
+    .single();
+  if (taskRow?.question_id) {
+    await saveQuestionHistory({
+      userId,
+      questionId: taskRow.question_id,
+      wasCorrect: isCorrect,
+      mode: "learn",
+      answerTimeSec: typeof secondsTaken === "number" ? secondsTaken : null,
+      date: today,
+    });
+  }
 
   // Get current student data
   const { data: student } = await supabase
@@ -269,6 +307,40 @@ export async function completeTask(
   const todayDone = todayTasksData || [];
   const todaySubjects = Array.from(new Set(todayDone.map((t: any) => t.subject)));
   const todayCorrect = todayDone.filter((t: any) => t.is_correct).length;
+
+  // Keep a simple daily ghost snapshot in sync (MVP)
+  const { data: todayMetrics } = await supabase
+    .from("tasks")
+    .select("is_correct, response_time_sec")
+    .eq("student_id", userId)
+    .eq("date", today)
+    .eq("completed", true);
+  const completedMetrics = todayMetrics || [];
+  const answersCount = completedMetrics.length;
+  const correctAnswers = completedMetrics.filter((t: any) => t.is_correct).length;
+  const speedValues = completedMetrics
+    .map((t: any) => Number(t.response_time_sec))
+    .filter((v: number) => Number.isFinite(v) && v > 0);
+  const avgResponseSec = speedValues.length
+    ? Math.round(speedValues.reduce((a: number, b: number) => a + b, 0) / speedValues.length)
+    : null;
+  const dayXpEarned = completedMetrics.reduce((sum: number, t: any) => {
+    const base = t.is_correct ? 20 : 10;
+    return sum + base;
+  }, 0);
+
+  await supabase.from("ghost_snapshots").upsert(
+    {
+      student_id: userId,
+      date: today,
+      xp_earned: dayXpEarned,
+      tasks_completed: answersCount,
+      correct_answers: correctAnswers,
+      avg_response_sec: avgResponseSec,
+      answers_count: answersCount,
+    },
+    { onConflict: "student_id,date" }
+  );
 
   // Check and award achievements
   const earnedKeys = await getStudentAchievements(userId);

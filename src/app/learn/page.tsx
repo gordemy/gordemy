@@ -13,6 +13,20 @@ import { getXPMultiplier, getSpeedBonus } from "@/lib/gamification";
 
 type TaskWithQuestion = Task & { question: Question | null };
 
+async function getNextIncompleteTaskId(userId: string): Promise<string | null> {
+  const today = new Date().toISOString().split("T")[0];
+  const { data } = await supabase
+    .from("tasks")
+    .select("id")
+    .eq("student_id", userId)
+    .eq("date", today)
+    .eq("completed", false)
+    .order("id", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  return data?.id ?? null;
+}
+
 function LearnContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -43,16 +57,36 @@ function LearnContent() {
   useEffect(() => {
     if (authLoading) return;
     if (!user) { router.push("/login"); return; }
-    if (!taskId) { router.push("/dashboard"); return; }
+    const userId = user.id;
 
     async function loadTask() {
+      // Reset UI state for each new task route
+      setLoading(true);
+      setTask(null);
+      setSelectedAnswer(null);
+      setSubmitted(false);
+      setResult(null);
+      setPendingAchievements([]);
+      setCurrentPopup(null);
+      setTimerActive(false);
+      if (timerRef.current) clearInterval(timerRef.current);
+
+      const currentTaskId = taskId || await getNextIncompleteTaskId(userId);
+      if (!currentTaskId) { router.push("/dashboard"); return; }
+
       const { data } = await supabase
         .from("tasks")
         .select("*, question:questions(*)")
-        .eq("id", taskId)
+        .eq("id", currentTaskId)
         .single();
 
-      if (!data || data.completed) { router.push("/dashboard"); return; }
+      if (!data) { router.push("/dashboard"); return; }
+      if (data.completed) {
+        const nextTaskId = await getNextIncompleteTaskId(userId);
+        if (nextTaskId) router.replace(`/learn?task=${nextTaskId}`);
+        else router.push("/dashboard");
+        return;
+      }
       setTask(data as any);
       setLoading(false);
       // Start timer
@@ -97,7 +131,7 @@ function LearnContent() {
     const totalXP = multipliedXP + (isCorrect ? speedBonus.bonusXP : 0);
 
     const { newXp, newStreak, levelUp, newAchievements } = await completeTask(
-      user.id, task.id, selectedAnswer, isCorrect, totalXP
+      user.id, task.id, selectedAnswer, isCorrect, totalXP, secondsTaken
     );
 
     setResult({
@@ -304,7 +338,17 @@ function LearnContent() {
               </div>
             )}
 
-            <GlowButton onClick={() => router.push("/dashboard")} color="green" fullWidth className="!py-4">
+            <GlowButton
+              onClick={async () => {
+                if (!user) return;
+                const nextTaskId = await getNextIncompleteTaskId(user.id);
+                if (nextTaskId) router.replace(`/learn?task=${nextTaskId}`);
+                else router.push("/dashboard");
+              }}
+              color="green"
+              fullWidth
+              className="!py-4"
+            >
               Продовжити →
             </GlowButton>
           </motion.div>

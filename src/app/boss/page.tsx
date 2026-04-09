@@ -6,8 +6,9 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useAuth } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase";
 import { getComboState } from "@/lib/gamification";
-import { CHARACTERS, AURA_STYLES, DEFAULT_AVATAR } from "@/lib/avatar";
-import { getStudent, type Question } from "@/lib/student";
+import { CHARACTERS, DEFAULT_AVATAR } from "@/lib/avatar";
+import { getStudent, saveQuestionHistory, type Question } from "@/lib/student";
+import BattleCharacter, { type BattleCue } from "@/components/BattleCharacter";
 
 type Phase = "intro" | "countdown" | "battle" | "mk-finish" | "result";
 type BossMode = "daily" | "weekly";
@@ -86,7 +87,7 @@ function MKFinish({won,bossEmoji,playerEmoji,onDone}:{won:boolean;bossEmoji:stri
       <motion.div initial={{scale:0.3,opacity:0}} animate={{scale:1,opacity:1}} transition={{delay:0.5,type:"spring",stiffness:300}} className="z-10 text-center">
         {won
           ?<><div className="text-5xl font-black text-yellow-300 tracking-widest mb-1 drop-shadow-lg">VICTORY!</div><div className="text-gordemy-muted text-sm tracking-widest">FLAWLESS</div></>
-          :<><div className="text-5xl font-black text-red-400 tracking-widest mb-1 drop-shadow-lg">DEFEAT</div><div className="text-gordemy-muted text-sm tracking-widest">TRY AGAIN TOMORROW</div></>
+          :<><div className="text-5xl font-black text-red-400 tracking-widest mb-1 drop-shadow-lg">DEFEAT</div><div className="text-gordemy-muted text-sm tracking-widest">TRY AGAIN</div></>
         }
       </motion.div>
       {won&&(
@@ -126,7 +127,8 @@ function BossPageInner() {
   const [flashColor,setFlashColor]=useState("");
   const [floats,setFloats]=useState<FloatText[]>([]);
   const [won,setWon]=useState(false);
-  const [alreadyDone,setAlreadyDone]=useState(false);
+  const [rewardDoneToday,setRewardDoneToday]=useState(false);
+  const [rewardGrantedInFight,setRewardGrantedInFight]=useState(false);
   const [countdown,setCountdown]=useState(3);
   const timerRef=useRef<NodeJS.Timeout|null>(null);
   const floatId=useRef(0);
@@ -134,6 +136,9 @@ function BossPageInner() {
   const playerHPRef=useRef(PLAYER_HP);
   const xpRef=useRef(0);
   const comboRef=useRef(0);
+  const battleCueNonce=useRef(0);
+  const [battleCue,setBattleCue]=useState<BattleCue|null>(null);
+  const pendingWinAnim=useRef(false);
 
   useEffect(()=>{
     if(!user)return;
@@ -142,10 +147,9 @@ function BossPageInner() {
       if(!st){router.replace("/dashboard");return;}
       setStudent(st);
       const today=new Date().toISOString().split("T")[0];
-      const monday=(()=>{const d=new Date();d.setDate(d.getDate()-((d.getDay()+6)%7));return d.toISOString().split("T")[0];})();
       const s=st as any;
-      if(mode==="daily"&&s.boss_daily_done&&s.boss_daily_reset===today)setAlreadyDone(true);
-      if(mode==="weekly"&&s.boss_weekly_done&&s.boss_weekly_reset===monday)setAlreadyDone(true);
+      if(mode==="daily"&&s.boss_daily_reset===today)setRewardDoneToday(true);
+      if(mode==="weekly"&&s.boss_weekly_reset===today)setRewardDoneToday(true);
     })();
   },[user,router,mode]);
 
@@ -161,20 +165,26 @@ function BossPageInner() {
     setPhase("mk-finish");
     if(!user)return;
     const today=new Date().toISOString().split("T")[0];
-    const monday=(()=>{const d=new Date();d.setDate(d.getDate()-((d.getDay()+6)%7));return d.toISOString().split("T")[0];})();
-    const xpGain=victory?cfg.xpWin:cfg.xpLose;
-    const gemsGain=victory?(mode==="weekly"?30:10):2;
-    const tier=victory?cfg.chestTier:"common";
-    const hours={common:1,rare:4,epic:12,legendary:24}[tier];
-    const now=new Date();
-    const chest={id:`boss-${Date.now()}`,tier,earnedAt:now.toISOString(),unlockAt:new Date(now.getTime()+hours*3600000).toISOString(),opened:false};
     const {data:fresh}=await supabase.from("students").select("xp,gems,chest_inventory").eq("id",user.id).single();
     const inv=Array.isArray(fresh?.chest_inventory)?fresh.chest_inventory:[];
-    const update:Record<string,unknown>={xp:(fresh?.xp||0)+xpGain,gems:(fresh?.gems||0)+gemsGain,chest_inventory:[...inv,chest]};
-    if(mode==="daily"){update.boss_daily_done=true;update.boss_daily_reset=today;}
-    else{update.boss_weekly_done=true;update.boss_weekly_reset=monday;}
+    const shouldReward=victory&&!rewardDoneToday;
+    setRewardGrantedInFight(shouldReward);
+    const xpGain=victory?cfg.xpWin:cfg.xpLose;
+    const update:Record<string,unknown>={xp:(fresh?.xp||0)+xpGain};
+    if(shouldReward){
+      const gemsGain=mode==="weekly"?30:10;
+      const tier=cfg.chestTier;
+      const hours={common:1,rare:4,epic:12,legendary:24}[tier];
+      const now=new Date();
+      const chest={id:`boss-${Date.now()}`,tier,earnedAt:now.toISOString(),unlockAt:new Date(now.getTime()+hours*3600000).toISOString(),opened:false};
+      update.gems=(fresh?.gems||0)+gemsGain;
+      update.chest_inventory=[...inv,chest];
+      if(mode==="daily"){update.boss_daily_done=true;update.boss_daily_reset=today;}
+      else{update.boss_weekly_done=true;update.boss_weekly_reset=today;}
+      setRewardDoneToday(true);
+    }
     await supabase.from("students").update(update).eq("id",user.id);
-  },[user,cfg,mode]);
+  },[user,cfg,mode,rewardDoneToday]);
 
   const handleAnswer=useCallback((idx:number)=>{
     if(timerRef.current)clearInterval(timerRef.current);
@@ -183,6 +193,14 @@ function BossPageInner() {
     const q=questions[qIdx];
     if(!q)return;
     const correct=idx===q.correct_answer;
+    if(user){
+      void saveQuestionHistory({
+        userId:user.id,
+        questionId:q.id,
+        wasCorrect:correct,
+        mode:mode==="weekly"?"boss_weekly":"boss_daily",
+      });
+    }
     const newCombo=correct?comboRef.current+1:0;
     comboRef.current=newCombo;
     setCombo(newCombo);
@@ -196,11 +214,16 @@ function BossPageInner() {
     if(correct){
       bossHPRef.current=Math.max(0,bossHPRef.current-dmgBoss);
       setBossHP(bossHPRef.current);
+      const lethal=bossHPRef.current<=0;
+      if(lethal)pendingWinAnim.current=true;
+      setBattleCue({ kind:"attack", nonce:++battleCueNonce.current });
       setShakeBoss(true);setTimeout(()=>setShakeBoss(false),400);
       setFlashColor("bg-yellow-400/15");setTimeout(()=>setFlashColor(""),250);
       addFloat(`-${dmgBoss} 💥`,"text-yellow-300");
       addFloat(`+${xpGain} XP`,"text-gordemy-green");
     } else {
+      pendingWinAnim.current=false;
+      setBattleCue({ kind:"hit", nonce:++battleCueNonce.current });
       playerHPRef.current=Math.max(0,playerHPRef.current-dmgPlayer);
       setPlayerHP(playerHPRef.current);
       setShakePlayer(true);setTimeout(()=>setShakePlayer(false),400);
@@ -208,14 +231,22 @@ function BossPageInner() {
       addFloat(`-${dmgPlayer} 💀`,"text-red-400");
     }
 
+    const afterRoundMs=correct&&bossHPRef.current<=0?1900:1100;
     setTimeout(async()=>{
       if(bossHPRef.current<=0){await endFight(true);return;}
       if(playerHPRef.current<=0){await endFight(false);return;}
       const next=qIdx+1;
       if(next>=questions.length){await endFight(bossHPRef.current<playerHPRef.current);return;}
       setQIdx(next);setSelected(null);
-    },1100);
-  },[selected,questions,qIdx,addFloat,endFight]);
+    },afterRoundMs);
+  },[selected,questions,qIdx,addFloat,endFight,user,mode]);
+
+  function onBattleActionComplete(kind:BattleCue["kind"]){
+    if(kind==="attack"&&pendingWinAnim.current){
+      pendingWinAnim.current=false;
+      setBattleCue({ kind:"win", nonce:++battleCueNonce.current });
+    }
+  }
 
   const startTimer=useCallback(()=>{
     if(timerRef.current)clearInterval(timerRef.current);
@@ -246,6 +277,7 @@ function BossPageInner() {
     playerHPRef.current=PLAYER_HP;setPlayerHP(PLAYER_HP);
     comboRef.current=0;setCombo(0);
     xpRef.current=0;setXpEarned(0);
+    setRewardGrantedInFight(false);
     setQIdx(0);setSelected(null);
     setPhase("countdown");setCountdown(3);
     let c=3;
@@ -262,20 +294,16 @@ function BossPageInner() {
   const avatarData:AvatarData={...DEFAULT_AVATAR,...(student?.avatar_data||{})};
   const char=CHARACTERS.find(c=>c.id===avatarData.character)||CHARACTERS[0];
 
-  if(alreadyDone)return(
-    <div className="max-w-md mx-auto px-4 py-16 text-center">
-      <div className="text-6xl mb-4">✅</div>
-      <h1 className="text-2xl font-black text-white mb-3">{cfg.name} переможений!</h1>
-      <p className="text-gordemy-muted mb-8">{mode==="weekly"?"Повертайся наступного понеділка.":"Повертайся завтра за новим босом."}</p>
-      <button onClick={()=>router.push("/dashboard")} className="px-6 py-3 rounded-2xl bg-gordemy-purple text-white font-bold">На головну</button>
-    </div>
-  );
-
   if(phase==="intro")return(
     <div className="max-w-md mx-auto px-4 py-10 flex flex-col items-center text-center">
       <motion.div animate={{scale:[1,1.08,1],rotate:[-3,3,-3]}} transition={{duration:2,repeat:Infinity}} className="text-8xl mb-6">{cfg.emoji}</motion.div>
       <div className={`w-full rounded-2xl border bg-gradient-to-br ${cfg.gradient} ${cfg.color} p-6 mb-6`}>
         <h1 className="text-3xl font-black text-white mb-1">{cfg.name}</h1>
+        {rewardDoneToday&&(
+          <div className="inline-flex mt-2 px-3 py-1 rounded-full border border-gordemy-green/40 bg-gordemy-green/10 text-gordemy-green text-xs font-black tracking-wider">
+            DONE
+          </div>
+        )}
         <p className="text-gordemy-muted text-sm mb-4">{cfg.description}</p>
         <div className="grid grid-cols-3 gap-3 text-center">
           {[{v:cfg.questions,l:"Питань"},{v:`${cfg.timePerQ}с`,l:"На питання"},{v:`+${cfg.xpWin}`,l:"XP (перемога"}].map((x,i)=>(
@@ -323,7 +351,8 @@ function BossPageInner() {
 
   if(phase==="result"){
     const xpGain=won?cfg.xpWin:cfg.xpLose;
-    const tier=won?cfg.chestTier:"common";
+    const rewardGranted=won&&rewardGrantedInFight;
+    const tier=rewardGranted?cfg.chestTier:"common";
     const tl={common:"Звичайний",rare:"Рідкісний",epic:"Епічний",legendary:"Легендарний"};
     return(
       <div className="max-w-md mx-auto px-4 py-12 flex flex-col items-center text-center">
@@ -334,11 +363,11 @@ function BossPageInner() {
           className={`text-3xl font-black mt-4 mb-2 ${won?"text-yellow-300":"text-red-400"}`}>
           {won?"БОС ПЕРЕМОЖЕНИЙ!":"ПОРАЗКА"}
         </motion.h1>
-        <p className="text-gordemy-muted mb-6">{won?`${cfg.name} впав!`:"Повертайся завтра!"}</p>
+        <p className="text-gordemy-muted mb-6">{won?`${cfg.name} впав!`:"Спробуй ще раз!"}</p>
         <div className="w-full bg-gordemy-card border border-gordemy-border rounded-2xl p-5 mb-6 space-y-2">
           <div className="flex justify-between"><span className="text-gordemy-muted text-sm">XP</span><span className="text-gordemy-green font-black">+{xpGain}</span></div>
-          <div className="flex justify-between"><span className="text-gordemy-muted text-sm">Gems</span><span className="text-yellow-300 font-black">+{won?(mode==="weekly"?30:10):2} 💎</span></div>
-          <div className="flex justify-between"><span className="text-gordemy-muted text-sm">Сундук</span><span className="text-gordemy-blue font-bold">🎁 {tl[tier]}</span></div>
+          <div className="flex justify-between"><span className="text-gordemy-muted text-sm">Gems</span><span className="text-yellow-300 font-black">+{rewardGranted?(mode==="weekly"?30:10):0} 💎</span></div>
+          <div className="flex justify-between"><span className="text-gordemy-muted text-sm">Сундук</span><span className="text-gordemy-blue font-bold">{rewardGranted?`🎁 ${tl[tier]}`:"DONE"}</span></div>
         </div>
         <button onClick={()=>router.push("/dashboard")} className="w-full py-4 rounded-2xl bg-gordemy-purple text-white font-black text-base">На головну</button>
       </div>
@@ -365,25 +394,23 @@ function BossPageInner() {
         <span className="text-xs text-gordemy-muted ml-1 self-center">{qIdx+1}/{questions.length}</span>
       </div>
       <div className="flex gap-3 mb-3 relative">
-        <HPBar label={student?.name||"Ти"} hp={playerHP} maxHp={PLAYER_HP} color="border-gordemy-blue/40" emoji={char.emoji} shaking={shakePlayer}/>
+        <HPBar label={student?.name||"Ти"} hp={playerHP} maxHp={PLAYER_HP} color="border-gordemy-blue/40" emoji="⚔️" shaking={shakePlayer}/>
         <div className="flex items-center font-black text-gordemy-orange text-sm">VS</div>
         <HPBar label={cfg.name} hp={bossHP} maxHp={cfg.hp} color={cfg.color} emoji={cfg.emoji} shaking={shakeBoss}/>
         <FloatingDmg texts={floats}/>
       </div>
+      <div className="relative mb-3 flex min-h-[128px] items-start justify-center pt-1">
+        <BattleCharacter cue={battleCue} onActionComplete={onBattleActionComplete} comboCount={combo} className="scale-95"/>
+        <span className={`absolute right-0 top-3 text-sm font-black tabular-nums ${timeLeft<=5?"text-red-400":"text-gordemy-muted"}`}>{timeLeft}с</span>
+      </div>
       <div className="h-2 rounded-full bg-gordemy-card border border-gordemy-border overflow-hidden mb-3">
         <motion.div animate={{width:`${tp}%`}} transition={{duration:0.25}} className={`h-full rounded-full bg-gradient-to-r ${tc}`}/>
       </div>
-      <div className="flex items-center justify-between mb-3">
-        <AnimatePresence>
-          {combo>=2?(
-            <motion.span key={combo} initial={{scale:0}} animate={{scale:1}} exit={{scale:0}}
-              className={`text-xs font-black px-3 py-1 rounded-full bg-white/10 ${cs.color}`}>
-              {cs.emoji} {cs.label} ×{cs.multiplier}
-            </motion.span>
-          ):<span/>}
-        </AnimatePresence>
-        <span className={`text-sm font-black tabular-nums ${timeLeft<=5?"text-red-400":"text-gordemy-muted"}`}>{timeLeft}с</span>
-      </div>
+      {combo>=2&&(
+        <div className="mb-2 flex justify-center">
+          <span className={`text-[11px] font-black ${cs.color}`}>{cs.emoji} {cs.label} ×{cs.multiplier} урон</span>
+        </div>
+      )}
       <div className="bg-gordemy-card border border-gordemy-border rounded-2xl p-4 mb-4 flex-1 min-h-[100px] flex items-center">
         <p className="text-white font-semibold text-sm leading-relaxed w-full text-center">{q.question_text}</p>
       </div>

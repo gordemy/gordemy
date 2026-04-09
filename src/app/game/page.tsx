@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAuth } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase";
-import { getStudent } from "@/lib/student";
+import { getStudent, saveQuestionHistory } from "@/lib/student";
 import Link from "next/link";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -131,6 +131,14 @@ export default function GamePage() {
 
     const q = questions[currentQ];
     const isCorrect = selectedAnswer === q.correct_answer;
+    if (user) {
+      void saveQuestionHistory({
+        userId: user.id,
+        questionId: q.id,
+        wasCorrect: isCorrect,
+        mode: "game",
+      });
+    }
     const damage = DIFF_DAMAGE[q.difficulty] || 20;
 
     if (isCorrect) {
