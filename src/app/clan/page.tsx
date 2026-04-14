@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAuth } from "@/lib/auth-context";
@@ -44,7 +44,14 @@ export default function ClanPage() {
   const [members, setMembers] = useState<ClanMember[]>([]);
   const [allClans, setAllClans] = useState<Clan[]>([]);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<"clan" | "ranking">("clan");
+  const [tab, setTab] = useState<"clan" | "ranking" | "chat">("clan");
+
+  // Chat state
+  const [messages, setMessages] = useState<{ id: string; student_name: string; text: string; created_at: string }[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [sendingMsg, setSendingMsg] = useState(false);
+  const chatBottomRef = useRef<HTMLDivElement>(null);
+  const [studentName, setStudentName] = useState("");
 
   // Create clan modal
   const [showCreate, setShowCreate] = useState(false);
@@ -109,6 +116,57 @@ export default function ClanPage() {
     );
 
     setLoading(false);
+
+    // Load student name for chat
+    const { data: stu } = await supabase.from("students").select("name").eq("id", user!.id).single();
+    if (stu) setStudentName(stu.name || "Учень");
+  }
+
+  // ── Chat: load messages + realtime subscription ──
+  useEffect(() => {
+    if (!myClan) return;
+
+    // Initial load
+    supabase
+      .from("clan_messages")
+      .select("id, student_name, text, created_at")
+      .eq("clan_id", myClan.id)
+      .order("created_at", { ascending: true })
+      .limit(50)
+      .then(({ data }) => { if (data) setMessages(data); });
+
+    // Realtime subscription
+    const channel = supabase
+      .channel(`clan_chat_${myClan.id}`)
+      .on("postgres_changes", {
+        event: "INSERT",
+        schema: "public",
+        table: "clan_messages",
+        filter: `clan_id=eq.${myClan.id}`,
+      }, payload => {
+        setMessages(prev => [...prev, payload.new as { id: string; student_name: string; text: string; created_at: string }]);
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [myClan]);
+
+  // Auto-scroll chat
+  useEffect(() => {
+    chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  async function sendMessage() {
+    if (!chatInput.trim() || !myClan || sendingMsg) return;
+    setSendingMsg(true);
+    await supabase.from("clan_messages").insert({
+      clan_id: myClan.id,
+      student_id: user!.id,
+      student_name: studentName || "Учень",
+      text: chatInput.trim(),
+    });
+    setChatInput("");
+    setSendingMsg(false);
   }
 
   async function createClan() {
@@ -379,10 +437,11 @@ export default function ClanPage() {
       </motion.div>
 
       {/* Tabs */}
-      <div className="flex gap-2 mb-5">
+      <div className="flex gap-2 mb-5 overflow-x-auto pb-1">
         {[
-          { id: "clan", label: "👥 Учасники" },
-          { id: "ranking", label: "🏆 Рейтинг кланів" },
+          { id: "clan",    label: "👥 Учасники" },
+          { id: "chat",    label: "💬 Чат" },
+          { id: "ranking", label: "🏆 Рейтинг" },
         ].map(t => (
           <button
             key={t.id}
@@ -432,6 +491,68 @@ export default function ClanPage() {
               </div>
             </motion.div>
           ))}
+        </div>
+      )}
+
+      {/* 💬 Chat */}
+      {tab === "chat" && (
+        <div className="flex flex-col" style={{ height: "420px" }}>
+          {/* Messages */}
+          <div className="flex-1 overflow-y-auto space-y-2 mb-3 pr-1">
+            {messages.length === 0 && (
+              <div className="text-center text-gordemy-muted text-sm py-10">
+                Чат порожній 💬<br />
+                <span className="text-xs">Будь першим хто напише!</span>
+              </div>
+            )}
+            {messages.map((msg, i) => {
+              const isMe = msg.student_name === studentName;
+              return (
+                <motion.div
+                  key={msg.id}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: i < 5 ? i * 0.03 : 0 }}
+                  className={`flex ${isMe ? "justify-end" : "justify-start"}`}
+                >
+                  <div className={`max-w-[75%] rounded-2xl px-3 py-2 ${
+                    isMe
+                      ? "bg-gordemy-purple/30 border border-gordemy-purple/40 rounded-tr-sm"
+                      : "bg-gordemy-card border border-gordemy-border rounded-tl-sm"
+                  }`}>
+                    {!isMe && (
+                      <div className="text-[10px] font-black text-gordemy-purple mb-0.5">{msg.student_name}</div>
+                    )}
+                    <div className="text-sm text-white">{msg.text}</div>
+                    <div className="text-[9px] text-gordemy-muted mt-0.5 text-right">
+                      {new Date(msg.created_at).toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" })}
+                    </div>
+                  </div>
+                </motion.div>
+              );
+            })}
+            <div ref={chatBottomRef} />
+          </div>
+
+          {/* Input */}
+          <div className="flex gap-2">
+            <input
+              value={chatInput}
+              onChange={e => setChatInput(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
+              placeholder="Написати в чат клану..."
+              maxLength={200}
+              className="flex-1 bg-gordemy-card border border-gordemy-border rounded-2xl px-4 py-2.5 text-sm text-white placeholder-gordemy-muted focus:outline-none focus:border-gordemy-purple/60"
+            />
+            <motion.button
+              whileTap={{ scale: 0.92 }}
+              onClick={sendMessage}
+              disabled={!chatInput.trim() || sendingMsg}
+              className="px-4 py-2.5 rounded-2xl bg-gordemy-purple text-white font-black text-sm disabled:opacity-40"
+            >
+              ➤
+            </motion.button>
+          </div>
         </div>
       )}
 

@@ -542,6 +542,8 @@ export function BattleCharacterDemo() {
   const CRIT_MULT = 1.5;
   const SELF_DMG = 12;
 
+  const QUESTION_TIME = 15; // seconds per question
+
   const [playerHp, setPlayerHp] = useState(P_MAX);
   const [enemyHp, setEnemyHp] = useState(E_MAX);
   const [combo, setCombo] = useState(0);
@@ -552,6 +554,8 @@ export function BattleCharacterDemo() {
   const [blackFlash, setBlackFlash] = useState(false);
   const [lastDmg, setLastDmg] = useState(BASE_DMG);
   const [chestTier, setChestTier] = useState<ChestTier | null>(null);
+  const [timeLeft, setTimeLeft] = useState(QUESTION_TIME);
+  const timedOutRef = useRef(false);
   const popKey = useRef(0);
 
   const critChance = getCritChance(combo);
@@ -565,6 +569,8 @@ export function BattleCharacterDemo() {
 
   const onCorrect = () => {
     if (isOver) return;
+    setTimeLeft(QUESTION_TIME); // reset timer
+    timedOutRef.current = false;
     const nc = combo + 1;
     setCombo(nc);
     setMaxCombo(prev => Math.max(prev, nc));
@@ -596,6 +602,8 @@ export function BattleCharacterDemo() {
 
   const onWrong = () => {
     if (isOver) return;
+    setTimeLeft(QUESTION_TIME); // reset timer
+    timedOutRef.current = false;
     setCombo(0);
     setPlayerAnim("hit");
     setEnemyAnim("attack");
@@ -620,7 +628,39 @@ export function BattleCharacterDemo() {
     setBlackFlash(false);
     setLastDmg(BASE_DMG);
     setChestTier(null);
+    setTimeLeft(QUESTION_TIME);
+    timedOutRef.current = false;
   };
+
+  // ── Question countdown timer ──
+  useEffect(() => {
+    if (isOver) return;
+    const id = window.setInterval(() => {
+      setTimeLeft(t => {
+        if (t <= 1) {
+          // Time's up — trigger wrong answer once
+          if (!timedOutRef.current) {
+            timedOutRef.current = true;
+            // Use setters directly to avoid stale closure referencing onWrong
+            setCombo(0);
+            setPlayerAnim("hit");
+            setEnemyAnim("attack");
+            setPlayerHp(prev => Math.max(0, prev - SELF_DMG));
+            showPop(`⏰ -${SELF_DMG}`, false, "player");
+            setTimeout(() => {
+              setPlayerAnim("idle");
+              setEnemyAnim("idle");
+              timedOutRef.current = false;
+            }, 530);
+          }
+          return QUESTION_TIME;
+        }
+        return t - 1;
+      });
+    }, 1000);
+    return () => clearInterval(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOver]);
 
   // Crit color escalates with combo
   const critColor =
@@ -706,21 +746,38 @@ export function BattleCharacterDemo() {
 
         {/* HP bars */}
         <div className="mb-3 space-y-2">
-          <HpBar
-            label="🧑‍🎓 Ти"
-            hp={playerHp}
-            max={P_MAX}
-            gradient="from-emerald-500 to-teal-400"
-            labelColor="text-emerald-400"
-          />
-          <HpBar
-            label="👹 Ворог"
-            hp={enemyHp}
-            max={E_MAX}
-            gradient="from-rose-600 to-orange-500"
-            labelColor="text-rose-400"
-          />
+          <HpBar label="🧑‍🎓 Ти"    hp={playerHp} max={P_MAX} gradient="from-emerald-500 to-teal-400" labelColor="text-emerald-400" />
+          <HpBar label="👹 Ворог" hp={enemyHp}  max={E_MAX} gradient="from-rose-600 to-orange-500"   labelColor="text-rose-400" />
         </div>
+
+        {/* Question timer bar */}
+        {!isOver && (
+          <div className="mb-3">
+            <div className="flex justify-between items-center mb-1">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">⏱ Час</span>
+              <motion.span
+                className={`text-xs font-black ${timeLeft <= 5 ? "text-rose-400" : timeLeft <= 9 ? "text-amber-400" : "text-zinc-400"}`}
+                animate={timeLeft <= 5 ? { scale: [1, 1.15, 1] } : {}}
+                transition={{ duration: 0.5, repeat: Infinity }}
+              >
+                {timeLeft}с
+              </motion.span>
+            </div>
+            <div className="h-2 rounded-full bg-zinc-900 border border-zinc-800 overflow-hidden">
+              <motion.div
+                className={`h-full rounded-full transition-colors ${
+                  timeLeft <= 5
+                    ? "bg-gradient-to-r from-rose-600 to-red-500"
+                    : timeLeft <= 9
+                    ? "bg-gradient-to-r from-amber-500 to-orange-400"
+                    : "bg-gradient-to-r from-emerald-500 to-teal-400"
+                }`}
+                animate={{ width: `${(timeLeft / QUESTION_TIME) * 100}%` }}
+                transition={{ duration: 0.4 }}
+              />
+            </div>
+          </div>
+        )}
 
         {/* Stats row — HP shown as bars above, so here: Damage + Crit only */}
         <div className="mb-4 grid grid-cols-2 gap-2">

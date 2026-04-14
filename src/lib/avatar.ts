@@ -1,11 +1,4 @@
-// Gordemy Avatar System v3 — modular equipment + legacy fields
-
-import {
-  calcHeroStats,
-  normalizeToEquip,
-  type HeroCombatStats,
-  type AvatarEquipConfig,
-} from "@/lib/equipment";
+// Gordemy Avatar System v2 — SVG Characters + Buff System
 
 export type UnlockCondition =
   | { type: "free" }
@@ -25,7 +18,7 @@ export interface AvatarItem {
   emoji: string;
   name: string;
   unlock: UnlockCondition;
-  rarity: "common" | "uncommon" | "rare" | "epic" | "legendary";
+  rarity: "common" | "rare" | "epic" | "legendary";
   description?: string;
   buff?: ItemBuff;
   debuff?: ItemBuff;
@@ -38,15 +31,6 @@ export interface AvatarConfig {
   aura: string;
   frame: string;
   left_hand?: string;
-  /** Modular slots (v3) */
-  torso?: string;
-  weapon?: string;
-  hands?: string;
-  legs?: string;
-  face?: string;
-  effect?: string;
-  /** Owned equipment ids (also persisted in students.equipment_inventory when set server-side) */
-  equipment_inventory?: string[];
 }
 
 export interface CharacterStyle {
@@ -123,52 +107,25 @@ export const AURAS: AvatarItem[] = [
   { id:"ice",    emoji:"❄️",name:"Крижана",    unlock:{type:"achievement",key:"streak_30"},rarity:"legendary",buff:{type:"hp",value:40,label:"+40 HP"} },
 ];
 
-const AURA_STYLES_V3: Record<string, string> = {
-  aura_none: "",
-  aura_blue:
-    "bg-gradient-to-br from-gordemy-blue/30 via-transparent to-gordemy-blue/10",
-  aura_fire:
-    "bg-gradient-to-br from-red-600/30 via-orange-500/10 to-transparent",
-  aura_gold:
-    "bg-gradient-to-br from-yellow-400/30 via-amber-300/10 to-transparent",
+export const AURA_STYLES: Record<string,string> = {
+  none:"",blue:"bg-gradient-to-br from-gordemy-blue/30 via-transparent to-gordemy-blue/10",
+  fire:"bg-gradient-to-br from-red-600/30 via-orange-500/10 to-transparent",
+  purple:"bg-gradient-to-br from-gordemy-purple/30 via-transparent to-gordemy-purple/10",
+  gold:"bg-gradient-to-br from-yellow-400/30 via-amber-300/10 to-transparent",
+  rainbow:"bg-gradient-to-br from-pink-500/30 via-gordemy-blue/20 to-green-500/20",
+  storm:"bg-gradient-to-br from-blue-400/20 via-purple-600/20 to-gray-900/30",
+  ice:"bg-gradient-to-br from-cyan-300/30 via-blue-200/10 to-transparent",
 };
 
-/** UI ring styles — supports v3 `aura_*` and legacy short ids. */
-export const AURA_STYLES: Record<string, string> = {
-  ...AURA_STYLES_V3,
-  none: "",
-  blue: AURA_STYLES_V3.aura_blue,
-  fire: AURA_STYLES_V3.aura_fire,
-  purple:
-    "bg-gradient-to-br from-gordemy-purple/30 via-transparent to-gordemy-purple/10",
-  gold: AURA_STYLES_V3.aura_gold,
-  rainbow: "bg-gradient-to-br from-pink-500/30 via-gordemy-blue/20 to-green-500/20",
-  storm: "bg-gradient-to-br from-blue-400/20 via-purple-600/20 to-gray-900/30",
-  ice: "bg-gradient-to-br from-cyan-300/30 via-blue-200/10 to-transparent",
-};
-
-const AURA_GLOW_V3: Record<string, string> = {
-  aura_none: "",
-  aura_blue: "0 0 40px 12px rgba(59,130,246,0.5)",
-  aura_fire: "0 0 40px 12px rgba(220,38,38,0.6)",
-  aura_gold: "0 0 50px 18px rgba(251,191,36,0.6)",
-};
-
-export const AURA_GLOW: Record<string, string> = {
-  ...AURA_GLOW_V3,
-  none: "",
-  blue: AURA_GLOW_V3.aura_blue,
-  fire: AURA_GLOW_V3.aura_fire,
-  purple: "0 0 40px 12px rgba(124,58,237,0.5)",
-  gold: AURA_GLOW_V3.aura_gold,
-  rainbow: "0 0 45px 12px rgba(168,85,247,0.5)",
-  storm: "0 0 40px 12px rgba(96,165,250,0.5)",
-  ice: "0 0 40px 12px rgba(103,232,249,0.5)",
+export const AURA_GLOW: Record<string,string> = {
+  none:"",blue:"0 0 40px 12px rgba(59,130,246,0.5)",fire:"0 0 40px 12px rgba(220,38,38,0.6)",
+  purple:"0 0 40px 12px rgba(124,58,237,0.5)",gold:"0 0 50px 18px rgba(251,191,36,0.6)",
+  rainbow:"0 0 45px 12px rgba(168,85,247,0.5)",storm:"0 0 40px 12px rgba(96,165,250,0.5)",
+  ice:"0 0 40px 12px rgba(103,232,249,0.5)",
 };
 
 export const RARITY_COLORS: Record<AvatarItem["rarity"], string> = {
   common: "border-gordemy-border",
-  uncommon: "border-emerald-600/45",
   rare: "border-gordemy-blue/50",
   epic: "border-gordemy-purple/50",
   legendary: "border-gordemy-orange/60",
@@ -176,7 +133,6 @@ export const RARITY_COLORS: Record<AvatarItem["rarity"], string> = {
 
 export const RARITY_GLOW: Record<AvatarItem["rarity"], string> = {
   common: "",
-  uncommon: "shadow-md shadow-emerald-500/15",
   rare: "shadow-lg shadow-gordemy-blue/15",
   epic: "shadow-lg shadow-gordemy-purple/20",
   legendary: "shadow-xl shadow-gordemy-orange/25",
@@ -184,7 +140,6 @@ export const RARITY_GLOW: Record<AvatarItem["rarity"], string> = {
 
 export const RARITY_LABEL_COLOR: Record<AvatarItem["rarity"], string> = {
   common: "text-gordemy-muted",
-  uncommon: "text-emerald-400",
   rare: "text-gordemy-blue",
   epic: "text-gordemy-purple",
   legendary: "text-gordemy-orange",
@@ -195,109 +150,42 @@ export const FRAME_STYLES: Record<string,string> = {
   dragon:"border-orange-500",fire:"border-red-500",crystal:"border-cyan-400",
 };
 
-export const DEFAULT_AVATAR: AvatarConfig = {
-  character: "student",
-  hat: "cap",
-  accessory: "book",
-  left_hand: "tome",
-  aura: "aura_none",
-  frame: "none",
-  torso: "torso_apprentice",
-  weapon: "wpn_wood",
-  hands: "hands_bare",
-  legs: "legs_cloth",
-  face: "face_calm",
-  effect: "effect_none",
+export const DEFAULT_AVATAR = {
+  character:"student", hat:"cap", accessory:"book",
+  left_hand:"tome", aura:"none", frame:"none",
 };
 
 export interface CharacterStats {
-  hp: number;
-  xpMult: number;
-  comboDmg: number;
-  gemBonus: number;
-  chestLuck: number;
-  defenseMitigation: number;
-  damageMult: number;
-  luck: number;
-  critChance: number;
-  comboSpeed: number;
-  accuracy: number;
+  hp:number; xpMult:number; comboDmg:number; gemBonus:number; chestLuck:number;
 }
 
-/** Merge legacy + modular fields; migrate old aura ids. */
-export function normalizeAvatarFull(raw: Partial<AvatarConfig>): AvatarConfig {
-  const d: AvatarConfig = { ...DEFAULT_AVATAR, ...raw };
-  const legacyAura = d.aura;
-  if (legacyAura && !legacyAura.startsWith("aura_")) {
-    const map: Record<string, string> = {
-      none: "aura_none",
-      blue: "aura_blue",
-      fire: "aura_fire",
-      purple: "aura_blue",
-      gold: "aura_gold",
-      rainbow: "aura_gold",
-      storm: "aura_fire",
-      ice: "aura_blue",
-    };
-    d.aura = map[legacyAura] ?? "aura_none";
-  }
-  const accToWpn: Record<string, string> = {
-    book: "wpn_wood",
-    sword: "wpn_iron",
-    wand: "wpn_crystal",
-    lightning: "wpn_iron",
-    gem_wand: "wpn_crystal",
-    axe: "wpn_iron",
-    trophy: "wpn_void",
-    none: "wpn_wood",
+export function calcStats(avatar:{character:string;hat:string;accessory:string;left_hand?:string;aura:string}):CharacterStats {
+  const stats:CharacterStats={hp:100,xpMult:1.0,comboDmg:1.0,gemBonus:1.0,chestLuck:0};
+  const apply=(item:AvatarItem|undefined)=>{
+    if(!item)return;
+    if(item.buff){
+      if(item.buff.type==="hp")stats.hp+=item.buff.value;
+      if(item.buff.type==="xp_mult")stats.xpMult*=item.buff.value;
+      if(item.buff.type==="combo_dmg")stats.comboDmg*=item.buff.value;
+      if(item.buff.type==="gem_bonus")stats.gemBonus*=item.buff.value;
+      if(item.buff.type==="chest_luck")stats.chestLuck+=item.buff.value;
+    }
+    if(item.debuff){
+      if(item.debuff.type==="hp")stats.hp+=item.debuff.value;
+      if(item.debuff.type==="xp_mult")stats.xpMult*=item.debuff.value;
+      if(item.debuff.type==="combo_dmg")stats.comboDmg*=item.debuff.value;
+    }
   };
-  const leftToHands: Record<string, string> = {
-    none: "hands_bare",
-    shield: "hands_gauntlet",
-    tome: "hands_leather",
-    orb: "hands_leather",
-    lantern: "hands_leather",
-    cannon: "hands_gauntlet",
-    anchor: "hands_gauntlet",
-    wings: "hands_swift",
-  };
-  if (!raw.weapon) d.weapon = accToWpn[d.accessory] ?? "wpn_wood";
-  if (!raw.hands) d.hands = leftToHands[d.left_hand || "tome"] ?? "hands_bare";
-  if (!raw.torso) d.torso = "torso_apprentice";
-  if (!raw.legs) d.legs = "legs_cloth";
-  if (!raw.face) d.face = "face_calm";
-  if (!raw.effect) d.effect = d.frame !== "none" ? "effect_spark" : "effect_none";
-  if (!d.equipment_inventory?.length) d.equipment_inventory = undefined;
-  return d;
+  apply(CHARACTERS.find(c=>c.id===avatar.character));
+  apply(HATS.find(h=>h.id===avatar.hat));
+  apply(ACCESSORIES.find(a=>a.id===avatar.accessory));
+  apply(LEFT_HAND.find(l=>l.id===(avatar.left_hand||"none")));
+  apply(AURAS.find(a=>a.id===avatar.aura));
+  stats.hp=Math.max(40,Math.round(stats.hp));
+  stats.xpMult=Math.round(stats.xpMult*100)/100;
+  stats.comboDmg=Math.round(stats.comboDmg*100)/100;
+  return stats;
 }
-
-export function getEquipConfig(avatar: AvatarConfig): AvatarEquipConfig {
-  return normalizeToEquip(avatar);
-}
-
-export function calcHeroCombat(avatar: AvatarConfig): HeroCombatStats {
-  return calcHeroStats(normalizeToEquip(normalizeAvatarFull(avatar)));
-}
-
-export function calcStats(avatar: Partial<AvatarConfig>): CharacterStats {
-  const full = normalizeAvatarFull(avatar as AvatarConfig);
-  const m = calcHeroStats(normalizeToEquip(full));
-  return {
-    hp: m.maxHp,
-    xpMult: m.xpMult,
-    comboDmg: m.comboDamageMult,
-    gemBonus: m.gemBonus,
-    chestLuck: m.chestLuck,
-    defenseMitigation: m.defenseMitigation,
-    damageMult: m.damageMult,
-    luck: m.luck,
-    critChance: m.critChance,
-    comboSpeed: m.comboSpeed,
-    accuracy: m.accuracy,
-  };
-}
-
-export type { HeroCombatStats, AvatarEquipConfig };
 
 export function isUnlocked(item:AvatarItem,ctx:{level:number;gems:number;streak:number;achievements?:string[];earnedAchievements?:string[]}):boolean {
   const u=item.unlock;
