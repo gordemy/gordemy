@@ -119,7 +119,7 @@ export default function NMTRoadPage() {
           {nextMilestone && (
             <div className="mt-4">
               <div className="flex justify-between text-[10px] text-zinc-500 mb-1.5">
-                <span>До "{nextMilestone.label}"</span>
+                <span>До &ldquo;{nextMilestone.label}&rdquo;</span>
                 <span>{nextMilestone.score - nmtScore} балів</span>
               </div>
               <div className="h-2.5 rounded-full bg-zinc-800 overflow-hidden">
