@@ -9,13 +9,16 @@ import {
   type Student, type Task, type Question,
 } from "@/lib/student";
 import { getLeague } from "@/lib/achievements";
-import { getPlayerTitle, getXPMultiplier } from "@/lib/gamification";
+import { getPlayerTitle, getDailyQuests, getTodayMysteryBox, getTodayNightChallenge, isNightTime, type DailyQuest } from "@/lib/gamification";
 import {
   CHARACTERS, HATS, ACCESSORIES, AURAS, FRAMES,
   AURA_STYLES, FRAME_STYLES, DEFAULT_AVATAR,
 } from "@/lib/avatar";
 import { supabase } from "@/lib/supabase";
 import Link from "next/link";
+import { MysteryBoxPopup } from "@/components/mystery-box-popup";
+import { NightChallengePopup } from "@/components/night-challenge-popup";
+import { LevelUpPopup } from "@/components/level-up-popup";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -606,6 +609,20 @@ export default function DashboardPage() {
   const [tasks, setTasks]   = useState<TaskWithQuestion[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // Mystery Box state
+  const [showMysteryBox, setShowMysteryBox] = useState(false);
+  const [mysteryBoxClaimed, setMysteryBoxClaimed] = useState(false);
+
+  // Night Challenge state
+  const [showNightChallenge, setShowNightChallenge] = useState(false);
+  const [nightAttempted, setNightAttempted] = useState(false);
+
+  // Gamification quests
+  const [dailyQuests, setDailyQuests] = useState<DailyQuest[]>([]);
+
+  // Level-up popup
+  const [levelUpPopup, setLevelUpPopup] = useState<number | null>(null);
+
   // Load everything
   const load = useCallback(async () => {
     if (!user) return;
@@ -627,10 +644,29 @@ export default function DashboardPage() {
       // Limit to 3 quests
       finalTasks = finalTasks.slice(0, 3);
 
-      const s = st as any;
+      // Load gamification data
+      const [mb, nightData, quests] = await Promise.all([
+        getTodayMysteryBox(user.id),
+        getTodayNightChallenge(user.id),
+        getDailyQuests(user.id),
+      ]);
 
+      setMysteryBoxClaimed(!!mb);
+      setNightAttempted(nightData.attempted);
+      setDailyQuests(quests);
+
+      const s = st as any;
       setStudent(s);
       setTasks(finalTasks);
+
+      // Level-up popup: compare with last seen level in localStorage
+      const storageKey = `gordemy_last_level_${user.id}`;
+      const lastLevel = parseInt(localStorage.getItem(storageKey) || "0", 10);
+      const currentLevel = s.level || 1;
+      if (lastLevel > 0 && currentLevel > lastLevel) {
+        setLevelUpPopup(currentLevel);
+      }
+      localStorage.setItem(storageKey, String(currentLevel));
     } finally {
       setLoading(false);
     }
@@ -703,45 +739,156 @@ export default function DashboardPage() {
 
   return (
     <div className="max-w-[480px] mx-auto px-4 py-6 pb-24">
+      {/* Popups */}
+      <AnimatePresence>
+        {showMysteryBox && (
+          <MysteryBoxPopup
+            userId={user!.id}
+            alreadyClaimed={mysteryBoxClaimed}
+            onClose={() => setShowMysteryBox(false)}
+            onClaimed={() => setMysteryBoxClaimed(true)}
+          />
+        )}
+        {showNightChallenge && (
+          <NightChallengePopup
+            userId={user!.id}
+            alreadyAttempted={nightAttempted}
+            onClose={() => { setShowNightChallenge(false); setNightAttempted(true); }}
+          />
+        )}
+        {levelUpPopup && (
+          <LevelUpPopup
+            level={levelUpPopup}
+            onClose={() => setLevelUpPopup(null)}
+          />
+        )}
+      </AnimatePresence>
+
       {/* Character Stage */}
       <CharacterStage avatar={avatar} student={student} title={playerTitle} />
 
-      <div className="mt-6">
+      <div className="mt-6 space-y-4">
+
+        {/* 🎲 Mystery Box + 🌙 Night Challenge row */}
+        <div className="grid grid-cols-2 gap-3">
+          {/* Mystery Box */}
+          <motion.button
+            whileTap={{ scale: 0.95 }}
+            onClick={() => setShowMysteryBox(true)}
+            className={`relative p-4 rounded-2xl border text-left overflow-hidden ${
+              mysteryBoxClaimed
+                ? "border-zinc-800 bg-zinc-900/50 opacity-60"
+                : "border-indigo-500/60 bg-indigo-950/40"
+            }`}
+          >
+            {!mysteryBoxClaimed && (
+              <motion.div
+                className="absolute inset-0 bg-indigo-500/10"
+                animate={{ opacity: [0, 0.3, 0] }}
+                transition={{ duration: 1.8, repeat: Infinity }}
+              />
+            )}
+            <div className="text-2xl mb-1">🎲</div>
+            <div className="text-white font-extrabold text-xs leading-tight">Mystery Box</div>
+            <div className={`text-[10px] font-bold mt-0.5 ${mysteryBoxClaimed ? "text-zinc-500" : "text-indigo-400"}`}>
+              {mysteryBoxClaimed ? "✓ Відкрито" : "Щоденний!"}
+            </div>
+          </motion.button>
+
+          {/* Night Challenge */}
+          <motion.button
+            whileTap={{ scale: 0.95 }}
+            onClick={() => setShowNightChallenge(true)}
+            className={`relative p-4 rounded-2xl border text-left overflow-hidden ${
+              nightAttempted
+                ? "border-zinc-800 bg-zinc-900/50 opacity-60"
+                : isNightTime()
+                ? "border-violet-500/60 bg-violet-950/40"
+                : "border-zinc-800 bg-zinc-900/40"
+            }`}
+          >
+            {isNightTime() && !nightAttempted && (
+              <motion.div
+                className="absolute inset-0 bg-violet-500/10"
+                animate={{ opacity: [0, 0.4, 0] }}
+                transition={{ duration: 2, repeat: Infinity }}
+              />
+            )}
+            <div className="text-2xl mb-1">🌙</div>
+            <div className="text-white font-extrabold text-xs leading-tight">Night Challenge</div>
+            <div className={`text-[10px] font-bold mt-0.5 ${
+              nightAttempted ? "text-zinc-500" : isNightTime() ? "text-violet-400" : "text-zinc-600"
+            }`}>
+              {nightAttempted ? "✓ Пройдено" : isNightTime() ? "АКТИВНИЙ! +150XP" : "21:00 – 23:00"}
+            </div>
+          </motion.button>
+        </div>
+
+        {/* 📋 Gamification Daily Quests */}
+        {dailyQuests.length > 0 && (
+          <div className="rounded-2xl border border-gordemy-border bg-gordemy-card p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-xs font-black uppercase tracking-widest text-gordemy-muted">📋 Щоденні квести</h2>
+              <Link href="/quests" className="text-xs font-bold text-gordemy-blue hover:text-blue-300 transition-colors">
+                Всі квести →
+              </Link>
+            </div>
+            <div className="space-y-2">
+              {dailyQuests.map(quest => (
+                <div key={quest.id} className={`flex items-center gap-3 p-2.5 rounded-xl border transition-all ${
+                  quest.completed ? "border-gordemy-green/30 bg-gordemy-green/5" : "border-zinc-800 bg-zinc-900/40"
+                }`}>
+                  <span className="text-xl">{quest.emoji}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className={`text-xs font-bold truncate ${quest.completed ? "text-gordemy-green" : "text-white"}`}>
+                      {quest.label}
+                    </div>
+                    <div className="h-1 rounded-full bg-zinc-800 mt-1 overflow-hidden">
+                      <motion.div
+                        className={`h-full rounded-full ${quest.completed ? "bg-gordemy-green" : "bg-gordemy-blue"}`}
+                        animate={{ width: `${Math.min(100, (quest.current / quest.target) * 100)}%` }}
+                        transition={{ duration: 0.6 }}
+                      />
+                    </div>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    {quest.completed ? (
+                      <span className="text-gordemy-green text-sm">✅</span>
+                    ) : (
+                      <span className="text-[10px] font-bold text-gordemy-muted">{quest.current}/{quest.target}</span>
+                    )}
+                    <div className="text-[9px] text-yellow-400 font-bold">+{quest.xpReward}XP</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Chest Inventory */}
         <ChestInventory chests={chests} onOpen={handleOpenChest} />
 
-        {/* Daily Quests */}
+        {/* Daily Tasks */}
         <DailyQuests tasks={tasks} onStart={handleStart} />
 
         {/* Game Mode Grid */}
         <GameModeGrid bossDaily={bossDaily} bossWeekly={bossWeekly} />
 
         {/* Quick links */}
-        <div className="flex gap-3 flex-wrap">
-          <Link href="/leaderboard" className="flex-1">
-            <motion.div whileTap={{ scale: 0.95 }} className="p-3 rounded-2xl border border-gordemy-border bg-gordemy-card text-center">
-              <div className="text-xl">🏆</div>
-              <div className="text-xs text-gordemy-muted mt-1">Рейтинг</div>
-            </motion.div>
-          </Link>
-          <Link href="/achievements" className="flex-1">
-            <motion.div whileTap={{ scale: 0.95 }} className="p-3 rounded-2xl border border-gordemy-border bg-gordemy-card text-center">
-              <div className="text-xl">🎖️</div>
-              <div className="text-xs text-gordemy-muted mt-1">Досягнення</div>
-            </motion.div>
-          </Link>
-          <Link href="/avatar" className="flex-1">
-            <motion.div whileTap={{ scale: 0.95 }} className="p-3 rounded-2xl border border-gordemy-border bg-gordemy-card text-center">
-              <div className="text-xl">🎨</div>
-              <div className="text-xs text-gordemy-muted mt-1">Аватар</div>
-            </motion.div>
-          </Link>
-          <Link href="/clan" className="flex-1">
-            <motion.div whileTap={{ scale: 0.95 }} className="p-3 rounded-2xl border border-gordemy-border bg-gordemy-card text-center">
-              <div className="text-xl">🏘️</div>
-              <div className="text-xs text-gordemy-muted mt-1">Клан</div>
-            </motion.div>
-          </Link>
+        <div className="grid grid-cols-4 gap-2">
+          {[
+            { href: "/leaderboard", emoji: "🏆", label: "Рейтинг" },
+            { href: "/nmt-road",    emoji: "🛤️", label: "Шлях НМТ" },
+            { href: "/battle-pass", emoji: "🎫", label: "Battle Pass" },
+            { href: "/clan",        emoji: "🏘️", label: "Клан" },
+          ].map(link => (
+            <Link key={link.href} href={link.href}>
+              <motion.div whileTap={{ scale: 0.95 }} className="p-3 rounded-2xl border border-gordemy-border bg-gordemy-card text-center">
+                <div className="text-xl">{link.emoji}</div>
+                <div className="text-[10px] text-gordemy-muted mt-1 font-medium">{link.label}</div>
+              </motion.div>
+            </Link>
+          ))}
         </div>
       </div>
     </div>

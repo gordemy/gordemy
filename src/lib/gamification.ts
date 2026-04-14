@@ -508,6 +508,155 @@ export async function saveNightChallengeResult(studentId: string, questionId: st
   return xpEarned;
 }
 
+// ─── Claim Daily Quest ────────────────────────────────────────────────────────
+
+export async function claimDailyQuest(studentId: string, questId: string, xpReward: number, gemReward: number): Promise<void> {
+  const { data: stu } = await supabase
+    .from("students")
+    .select("xp, level, gems, daily_quest_claimed")
+    .eq("id", studentId)
+    .single();
+  if (!stu) return;
+
+  const claimedIds: string[] = stu.daily_quest_claimed
+    ? (typeof stu.daily_quest_claimed === "string" ? JSON.parse(stu.daily_quest_claimed) : stu.daily_quest_claimed)
+    : [];
+
+  if (claimedIds.includes(questId)) return; // already claimed
+
+  const newXp = (stu.xp || 0) + xpReward;
+  await supabase.from("students").update({
+    xp: newXp,
+    level: Math.floor(newXp / 100) + 1,
+    gems: (stu.gems || 0) + gemReward,
+    daily_quest_claimed: JSON.stringify([...claimedIds, questId]),
+  }).eq("id", studentId);
+}
+
+// ─── Weekly Quests ────────────────────────────────────────────────────────────
+
+export interface WeeklyQuest {
+  id: string;
+  label: string;
+  description: string;
+  target: number;
+  current: number;
+  xpReward: number;
+  gemReward: number;
+  emoji: string;
+  completed: boolean;
+}
+
+export async function getWeeklyQuests(studentId: string): Promise<WeeklyQuest[]> {
+  // Get week start (Monday)
+  const now = new Date();
+  const day = now.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  const weekStart = new Date(now);
+  weekStart.setDate(now.getDate() + diff);
+  weekStart.setHours(0, 0, 0, 0);
+
+  const weekStartStr = weekStart.toISOString().split("T")[0];
+
+  // Tasks this week
+  const { data: tasks } = await supabase
+    .from("tasks")
+    .select("completed, is_correct, date")
+    .eq("student_id", studentId)
+    .gte("date", weekStartStr);
+
+  // Boss wins this week
+  const { data: bossWins } = await supabase
+    .from("boss_attempts")
+    .select("id, won, created_at")
+    .eq("student_id", studentId)
+    .eq("won", true)
+    .gte("created_at", weekStart.toISOString());
+
+  // Student data
+  const { data: stu } = await supabase
+    .from("students")
+    .select("weekly_xp, streak, weekly_quest_claimed")
+    .eq("id", studentId)
+    .single();
+
+  const completedThisWeek = (tasks || []).filter((t: any) => t.completed).length;
+  const correctThisWeek = (tasks || []).filter((t: any) => t.is_correct).length;
+  const bossWinsCount = (bossWins || []).length;
+  const weeklyXp = stu?.weekly_xp || 0;
+  const streak = stu?.streak || 0;
+
+  const claimedIds: string[] = stu?.weekly_quest_claimed
+    ? (typeof stu.weekly_quest_claimed === "string" ? JSON.parse(stu.weekly_quest_claimed) : stu.weekly_quest_claimed)
+    : [];
+
+  return [
+    {
+      id: "weekly_tasks_30",
+      label: "30 завдань за тиждень",
+      description: "Виконай 30 завдань впродовж тижня",
+      target: 30, current: Math.min(completedThisWeek, 30),
+      xpReward: 200, gemReward: 20, emoji: "📋",
+      completed: claimedIds.includes("weekly_tasks_30") || completedThisWeek >= 30,
+    },
+    {
+      id: "weekly_correct_20",
+      label: "20 правильних відповідей",
+      description: "Дай 20 правильних відповідей цього тижня",
+      target: 20, current: Math.min(correctThisWeek, 20),
+      xpReward: 150, gemReward: 15, emoji: "✅",
+      completed: claimedIds.includes("weekly_correct_20") || correctThisWeek >= 20,
+    },
+    {
+      id: "weekly_boss_3",
+      label: "Переможи 3 Боси",
+      description: "Виграй 3 битви проти Боса за тиждень",
+      target: 3, current: Math.min(bossWinsCount, 3),
+      xpReward: 250, gemReward: 25, emoji: "👹",
+      completed: claimedIds.includes("weekly_boss_3") || bossWinsCount >= 3,
+    },
+    {
+      id: "weekly_xp_500",
+      label: "Заробити 500 XP",
+      description: "Набери 500 XP впродовж тижня",
+      target: 500, current: Math.min(weeklyXp, 500),
+      xpReward: 300, gemReward: 30, emoji: "⚡",
+      completed: claimedIds.includes("weekly_xp_500") || weeklyXp >= 500,
+    },
+    {
+      id: "weekly_streak_7",
+      label: "Стрік 7 днів",
+      description: "Займайся 7 днів поспіль",
+      target: 7, current: Math.min(streak, 7),
+      xpReward: 400, gemReward: 50, emoji: "🔥",
+      completed: claimedIds.includes("weekly_streak_7") || streak >= 7,
+    },
+  ];
+}
+
+export async function claimWeeklyQuest(studentId: string, questId: string, xpReward: number, gemReward: number): Promise<void> {
+  const { data: stu } = await supabase
+    .from("students")
+    .select("xp, level, gems, weekly_quest_claimed")
+    .eq("id", studentId)
+    .single();
+  if (!stu) return;
+
+  const claimedIds: string[] = stu.weekly_quest_claimed
+    ? (typeof stu.weekly_quest_claimed === "string" ? JSON.parse(stu.weekly_quest_claimed) : stu.weekly_quest_claimed)
+    : [];
+
+  if (claimedIds.includes(questId)) return;
+
+  const newXp = (stu.xp || 0) + xpReward;
+  await supabase.from("students").update({
+    xp: newXp,
+    level: Math.floor(newXp / 100) + 1,
+    gems: (stu.gems || 0) + gemReward,
+    weekly_quest_claimed: JSON.stringify([...claimedIds, questId]),
+  }).eq("id", studentId);
+}
+
 // ─── Weekly XP Reset ─────────────────────────────────────────────────────────
 
 export async function checkWeeklyReset(studentId: string): Promise<void> {
