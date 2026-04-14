@@ -126,12 +126,13 @@ export default function BattleCharacter({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// NEW: Emoji-based character + revamped Battle Demo
+// NEW: BlobChar — SVG sprite base + emoji equipment + alive animations
+// Used by /battle-demo only. Existing BattleCharacter above is untouched.
 // ─────────────────────────────────────────────────────────────────────────────
 
 type DemoAnim = "idle" | "attack" | "crit" | "hit" | "win";
 
-/** Black Flash / crit chance by combo streak */
+/** Crit chance doubles each combo step: 2→15%, 3→30%, 4→60%, 5+→100% */
 function getCritChance(combo: number): number {
   if (combo >= 5) return 100;
   if (combo >= 4) return 60;
@@ -141,29 +142,31 @@ function getCritChance(combo: number): number {
 }
 
 // ── Floating aura particle ────────────────────────────────────────────────────
-function AuraDot({
+function AuraParticle({
   emoji,
   delay,
   x,
   y,
+  size = "text-xs",
 }: {
   emoji: string;
   delay: number;
   x: number;
   y: number;
+  size?: string;
 }) {
   return (
     <motion.span
-      className="pointer-events-none absolute select-none text-xs"
+      className={`pointer-events-none absolute select-none ${size} z-20`}
       style={{ left: `${x}%`, top: `${y}%` }}
       animate={{
-        y: [-7, 7, -7],
-        x: [-4, 4, -4],
-        opacity: [0.35, 0.95, 0.35],
-        scale: [0.8, 1.1, 0.8],
+        y: [-9, 9, -9],
+        x: [-5, 5, -5],
+        opacity: [0.25, 0.95, 0.25],
+        scale: [0.7, 1.15, 0.7],
       }}
       transition={{
-        duration: 1.9 + delay * 0.45,
+        duration: 1.7 + delay * 0.55,
         repeat: Infinity,
         delay,
         ease: "easeInOut",
@@ -174,165 +177,272 @@ function AuraDot({
   );
 }
 
-// ── Emoji character ───────────────────────────────────────────────────────────
-interface EmojiCharProps {
+// ── Equipment slot types ──────────────────────────────────────────────────────
+interface Equipment {
+  head?: string;    // hat / crown emoji — displayed above head
+  torso?: string;   // armor / coat emoji — displayed on chest
+  weapon?: string;  // weapon emoji — held in right hand
+  aura?: string;    // aura particle emoji (floats around body)
+}
+
+// ── BlobChar ──────────────────────────────────────────────────────────────────
+// SVG sprite-sheet character (same blob as /battle-sprites) with
+// emoji equipment overlaid at precise body positions.
+// Every element animates — nothing is static.
+function BlobChar({
+  isEnemy = false,
+  anim,
+  auraColor,
+  equipment = {},
+  flipped = false,
+}: {
   isEnemy?: boolean;
   anim: DemoAnim;
   auraColor: string;
+  equipment?: Equipment;
   flipped?: boolean;
-}
+}) {
+  const [frame, setFrame] = useState(0);
+  const prevAnim = useRef(anim);
 
-function EmojiChar({ isEnemy = false, anim, auraColor }: EmojiCharProps) {
+  // Reset frame on anim change
+  useEffect(() => {
+    if (prevAnim.current !== anim) {
+      setFrame(0);
+      prevAnim.current = anim;
+    }
+  }, [anim]);
+
+  // Frame ticker — 115 ms per frame
+  const spriteKey: BattleAnim =
+    anim === "crit"
+      ? "attack"
+      : anim === "idle" || anim === "attack" || anim === "hit" || anim === "win"
+      ? anim
+      : "idle";
+
+  useEffect(() => {
+    const frames = SPRITE_SET[spriteKey];
+    const id = window.setInterval(() => {
+      setFrame((f) => (f + 1) % frames.length);
+    }, 115);
+    return () => clearInterval(id);
+  }, [spriteKey]);
+
+  const frames = SPRITE_SET[spriteKey];
+  const src = frames[Math.min(frame, frames.length - 1)] ?? frames[0];
+
   const isAttacking = anim === "attack" || anim === "crit";
   const isHit = anim === "hit";
   const isWin = anim === "win";
+  const auraEmoji = equipment.aura ?? (isEnemy ? "🔥" : "⚡");
 
-  // Face changes by state
-  const face = isWin
-    ? isEnemy
-      ? "💀"
-      : "😎"
-    : isHit
-      ? isEnemy
-        ? "😱"
-        : "😵‍💫"
-      : isAttacking
-        ? "😤"
-        : isEnemy
-          ? "👹"
-          : "🧑‍🎓";
-
-  const par = isEnemy ? "🔥" : "⚡";
-  const torso = isEnemy ? "🦹" : "🥼";
-
-  // Body animation
+  // Framer Motion body animation (layered on top of sprite frames)
   const bodyAnimate = isHit
-    ? {
-        x: [0, isEnemy ? 14 : -14, isEnemy ? -8 : 8, 0],
-        y: [0, -4, 2, 0],
-      }
+    ? { x: [0, isEnemy ? 24 : -24, isEnemy ? -14 : 14, 0], y: [0, -6, 3, 0] }
     : isWin
-      ? { y: [0, -16, 0, -10, 0], rotate: [0, -8, 8, 0] }
-      : isAttacking
-        ? { x: [0, isEnemy ? -15 : 15, 0], scale: [1, 1.1, 1] }
-        : { y: [0, -5, 0], rotate: [0, -1.5, 1.5, 0] }; // idle float
+    ? { y: [0, -22, 0, -15, 0], rotate: [0, -7, 7, -3, 0] }
+    : isAttacking
+    ? { x: [0, isEnemy ? -28 : 28, 0], scale: [1, 1.12, 1] }
+    : { y: [0, -5, 0] }; // breathing idle float
 
   const bodyTransition = isHit
-    ? { duration: 0.4, ease: "easeOut" as const }
+    ? { duration: 0.42, ease: "easeOut" as const }
     : isWin
-      ? { duration: 0.7, repeat: 3 }
-      : isAttacking
-        ? { duration: 0.28, ease: "easeOut" as const }
-        : { duration: 2.5, repeat: Infinity, ease: "easeInOut" as const };
+    ? { duration: 0.75, repeat: 3 }
+    : isAttacking
+    ? { duration: 0.3, ease: "easeOut" as const }
+    : { duration: 2.7, repeat: Infinity, ease: "easeInOut" as const };
 
+  // Sprite display: viewBox 56×80 → h-28 = 112px → w ≈ 78px
+  // Equipment positions are relative to the 78×112 sprite container
   return (
-    <div className="relative" style={{ width: 88, height: 128 }}>
-      {/* Pulsing aura glow */}
+    <div
+      className="relative flex flex-col items-center"
+      style={{ width: 104, height: 150 }}
+    >
+      {/* Pulsing aura glow behind character */}
       <motion.div
-        className="absolute inset-0 rounded-full blur-2xl"
+        className="pointer-events-none absolute rounded-full blur-3xl"
         style={{
-          background: `radial-gradient(ellipse, ${auraColor}75, transparent 68%)`,
+          background: `radial-gradient(ellipse, ${auraColor}65, transparent 68%)`,
+          inset: "-20px",
+          zIndex: 0,
         }}
-        animate={{
-          scale: [1, 1.25, 1],
-          opacity: [0.5, 0.88, 0.5],
-        }}
-        transition={{ duration: 2.2, repeat: Infinity, ease: "easeInOut" }}
+        animate={{ scale: [1, 1.4, 1], opacity: [0.38, 0.82, 0.38] }}
+        transition={{ duration: 2.5, repeat: Infinity, ease: "easeInOut" }}
       />
 
-      {/* Aura particles */}
-      <AuraDot emoji={par} delay={0} x={4} y={18} />
-      <AuraDot emoji={par} delay={0.45} x={70} y={12} />
-      <AuraDot emoji={par} delay={0.9} x={12} y={68} />
-      <AuraDot emoji={par} delay={1.35} x={62} y={72} />
+      {/* Aura particles floating around body */}
+      <AuraParticle emoji={auraEmoji} delay={0}    x={3}  y={8}  />
+      <AuraParticle emoji={auraEmoji} delay={0.55} x={74} y={4}  />
+      <AuraParticle emoji={auraEmoji} delay={1.1}  x={6}  y={68} />
+      <AuraParticle emoji={auraEmoji} delay={1.65} x={70} y={60} />
 
-      {/* Character body */}
+      {/* Attack glow ring */}
+      <AnimatePresence>
+        {isAttacking && (
+          <motion.div
+            key="atk-ring"
+            className="pointer-events-none absolute rounded-full"
+            style={{
+              background: `radial-gradient(ellipse, ${auraColor}55, transparent 70%)`,
+              inset: "-10px",
+              zIndex: 8,
+            }}
+            initial={{ opacity: 0.4, scale: 0.85 }}
+            animate={{ opacity: [0.55, 1, 0.35], scale: [0.9, 1.25, 1.05] }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.38, repeat: 2 }}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* ── Character body + equipment ── */}
       <motion.div
-        className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-0.5"
+        className="relative z-10"
         animate={bodyAnimate}
         transition={bodyTransition}
+        style={{
+          marginTop: 14, // breathing room for head equipment
+          transformOrigin: "center bottom",
+          transform: flipped ? "scaleX(-1)" : "none",
+        }}
       >
-        {/* Face */}
-        <motion.span
-          className="text-4xl leading-none"
-          animate={
-            isAttacking
-              ? {
-                  scale: [1, 1.2, 1],
-                  rotate: [0, isEnemy ? -14 : 14, 0],
-                }
-              : { rotate: [0, -2.5, 2.5, 0] }
-          }
-          transition={
-            isAttacking
-              ? { duration: 0.28 }
-              : { duration: 3.5, repeat: Infinity, ease: "easeInOut" }
-          }
-        >
-          {face}
-        </motion.span>
-
-        {/* Torso row: arm · body · arm */}
-        <div className="flex items-center gap-0.5 leading-none">
+        {/* HEAD EQUIPMENT — floats gently above head */}
+        {equipment.head && (
           <motion.span
-            className="text-xl"
-            style={{ display: "inline-block", transformOrigin: "50% 10%" }}
-            animate={{ rotate: [-20, 20, -20] }}
+            className="pointer-events-none absolute select-none"
+            style={{
+              fontSize: 24,
+              left: "50%",
+              top: -26,
+              transform: "translateX(-50%)",
+              zIndex: 22,
+              display: "inline-block",
+            }}
+            animate={{ y: [0, -4, 0], rotate: [-6, 6, -6] }}
+            transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+          >
+            {equipment.head}
+          </motion.span>
+        )}
+
+        {/* BASE SVG SPRITE */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={src}
+          alt=""
+          width={78}
+          height={112}
+          draggable={false}
+          style={{ imageRendering: "pixelated", display: "block" }}
+          className="relative z-10 select-none drop-shadow-[0_8px_18px_rgba(0,0,0,0.75)]"
+        />
+
+        {/* TORSO EQUIPMENT — centered on chest, breathes with body */}
+        {equipment.torso && (
+          <motion.span
+            className="pointer-events-none absolute select-none"
+            style={{
+              fontSize: 22,
+              left: "50%",
+              top: 50,
+              transform: "translateX(-50%)",
+              zIndex: 14,
+              display: "inline-block",
+            }}
+            animate={
+              isAttacking
+                ? { scale: [1, 1.18, 1], rotate: [0, isEnemy ? -10 : 10, 0] }
+                : { scale: [1, 1.04, 1] }
+            }
             transition={{
-              duration: 1.35,
+              duration: isAttacking ? 0.3 : 2.6,
               repeat: Infinity,
               ease: "easeInOut",
-              delay: 0.08,
             }}
           >
-            🤛
+            {equipment.torso}
           </motion.span>
+        )}
 
+        {/* WEAPON — right hand, swings on attack */}
+        {equipment.weapon && (
           <motion.span
-            className="text-[2rem] leading-none"
-            animate={isAttacking ? { scale: [1, 1.1, 1] } : {}}
-            transition={{ duration: 0.28 }}
-          >
-            {torso}
-          </motion.span>
-
-          <motion.span
-            className="text-xl"
-            style={{ display: "inline-block", transformOrigin: "50% 10%" }}
-            animate={{ rotate: [20, -20, 20] }}
-            transition={{
-              duration: 1.35,
-              repeat: Infinity,
-              ease: "easeInOut",
-              delay: 0.32,
+            className="pointer-events-none absolute select-none"
+            style={{
+              fontSize: 26,
+              right: -18,
+              top: 48,
+              zIndex: 22,
+              display: "inline-block",
+              transformOrigin: "20% 85%",
             }}
+            animate={
+              isAttacking
+                ? {
+                    rotate: [-45, 35, -20, 5],
+                    scale: [1, 1.45, 1.1, 1],
+                    x: [0, isEnemy ? -8 : 8, 0],
+                  }
+                : { rotate: [-8, 8, -8] }
+            }
+            transition={
+              isAttacking
+                ? { duration: 0.35, ease: "easeOut" }
+                : {
+                    duration: 2,
+                    repeat: Infinity,
+                    ease: "easeInOut",
+                    delay: 0.15,
+                  }
+            }
           >
-            🤜
+            {equipment.weapon}
           </motion.span>
-        </div>
+        )}
 
-        {/* Legs */}
-        <motion.div
-          className="flex gap-0.5 text-2xl leading-none"
-          animate={{ y: [0, 2.5, 0] }}
-          transition={{ duration: 1.2, repeat: Infinity, ease: "easeInOut" }}
-        >
-          <span>🦵</span>
-          <span style={{ transform: "scaleX(-1)", display: "inline-block" }}>
-            🦵
-          </span>
-        </motion.div>
+        {/* CRIT overlay flash on character */}
+        <AnimatePresence>
+          {anim === "crit" && (
+            <motion.div
+              key="crit-flash"
+              className="pointer-events-none absolute inset-0 rounded-2xl z-30"
+              style={{
+                background: "rgba(168,85,247,0.65)",
+                mixBlendMode: "screen",
+              }}
+              initial={{ opacity: 1 }}
+              animate={{ opacity: [1, 0.7, 1, 0] }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.52 }}
+            />
+          )}
+        </AnimatePresence>
+
+        {/* HIT flash */}
+        <AnimatePresence>
+          {isHit && (
+            <motion.div
+              key="hit-flash"
+              className="pointer-events-none absolute inset-0 rounded-2xl z-30"
+              style={{ background: "rgba(239,68,68,0.5)", mixBlendMode: "screen" }}
+              initial={{ opacity: 1 }}
+              animate={{ opacity: [1, 0.5, 0] }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.38 }}
+            />
+          )}
+        </AnimatePresence>
       </motion.div>
 
-      {/* Dynamic shadow */}
+      {/* Dynamic shadow on the ground */}
       <motion.div
-        className="absolute bottom-0 left-1/2 -translate-x-1/2 rounded-full bg-black/45 blur-sm"
-        animate={{
-          width: [34, 40, 34],
-          height: [6, 8, 6],
-          opacity: [0.38, 0.55, 0.38],
-        }}
-        transition={{ duration: 2.5, repeat: Infinity, ease: "easeInOut" }}
+        className="pointer-events-none rounded-full bg-black/45 blur-sm"
+        style={{ width: 38, height: 7, marginTop: -2 }}
+        animate={{ width: [34, 44, 34], opacity: [0.32, 0.58, 0.32] }}
+        transition={{ duration: 2.7, repeat: Infinity, ease: "easeInOut" }}
       />
     </div>
   );
@@ -353,21 +463,29 @@ function HpBar({
   labelColor: string;
 }) {
   const pct = Math.max(0, (hp / max) * 100);
+  const danger = pct < 30;
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900/80 px-3 py-2.5">
       <div
-        className={`mb-1 flex justify-between text-[10px] font-bold uppercase tracking-wider ${labelColor}`}
+        className={`mb-1.5 flex justify-between text-[10px] font-bold uppercase tracking-wider ${labelColor}`}
       >
         <span>{label}</span>
         <span className="font-mono text-zinc-400">
           {hp}/{max}
         </span>
       </div>
-      <div className="h-2 overflow-hidden rounded-full bg-black/50">
+      <div className="h-2.5 overflow-hidden rounded-full bg-black/50">
         <motion.div
           className={`h-full rounded-full bg-gradient-to-r ${gradient}`}
-          animate={{ width: `${pct}%` }}
-          transition={{ type: "spring", stiffness: 130, damping: 18 }}
+          animate={{
+            width: `${pct}%`,
+            ...(danger ? { opacity: [1, 0.65, 1] } : {}),
+          }}
+          transition={
+            danger
+              ? { width: { type: "spring", stiffness: 130, damping: 18 }, opacity: { duration: 0.7, repeat: Infinity } }
+              : { type: "spring", stiffness: 130, damping: 18 }
+          }
         />
       </div>
     </div>
@@ -380,21 +498,26 @@ function StatBox({
   value,
   color = "text-white",
   pulse = false,
+  glow,
 }: {
   label: string;
   value: string;
   color?: string;
   pulse?: boolean;
+  glow?: string;
 }) {
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900/80 p-2 text-center">
-      <div className="text-[9px] uppercase tracking-wider text-zinc-500">
+    <div
+      className="rounded-xl border border-zinc-800 bg-zinc-900/80 p-2.5 text-center"
+      style={glow ? { boxShadow: `0 0 14px ${glow}` } : {}}
+    >
+      <div className="mb-0.5 text-[9px] uppercase tracking-wider text-zinc-500">
         {label}
       </div>
       <motion.div
         className={`text-lg font-black ${color}`}
-        animate={pulse ? { scale: [1, 1.07, 1] } : {}}
-        transition={{ duration: 1.1, repeat: Infinity }}
+        animate={pulse ? { scale: [1, 1.1, 1] } : {}}
+        transition={{ duration: 0.9, repeat: Infinity }}
       >
         {value}
       </motion.div>
@@ -402,24 +525,20 @@ function StatBox({
   );
 }
 
-// ── Demo page ─────────────────────────────────────────────────────────────────
+// ── Battle Demo page ──────────────────────────────────────────────────────────
 export function BattleCharacterDemo() {
-  const P_MAX = 80;
-  const E_MAX = 60;
-  const BASE_DMG = 20;
+  const P_MAX = 100;
+  const E_MAX = 80;
+  const BASE_DMG = 18;
   const CRIT_MULT = 1.5;
-  const SELF_DMG = 10;
+  const SELF_DMG = 12;
 
   const [playerHp, setPlayerHp] = useState(P_MAX);
   const [enemyHp, setEnemyHp] = useState(E_MAX);
   const [combo, setCombo] = useState(0);
   const [playerAnim, setPlayerAnim] = useState<DemoAnim>("idle");
   const [enemyAnim, setEnemyAnim] = useState<DemoAnim>("idle");
-  const [dmgPop, setDmgPop] = useState<{
-    text: string;
-    crit: boolean;
-    k: number;
-  } | null>(null);
+  const [dmgPop, setDmgPop] = useState<{ text: string; crit: boolean; side: "enemy" | "player"; k: number } | null>(null);
   const [blackFlash, setBlackFlash] = useState(false);
   const [lastDmg, setLastDmg] = useState(BASE_DMG);
   const popKey = useRef(0);
@@ -428,9 +547,9 @@ export function BattleCharacterDemo() {
   const isOver = playerHp <= 0 || enemyHp <= 0;
   const playerWon = enemyHp <= 0;
 
-  const showPop = (text: string, crit: boolean) => {
-    setDmgPop({ text, crit, k: ++popKey.current });
-    setTimeout(() => setDmgPop(null), 950);
+  const showPop = (text: string, crit: boolean, side: "enemy" | "player") => {
+    setDmgPop({ text, crit, side, k: ++popKey.current });
+    setTimeout(() => setDmgPop(null), 1000);
   };
 
   const onCorrect = () => {
@@ -444,20 +563,19 @@ export function BattleCharacterDemo() {
 
     if (isCrit) {
       setBlackFlash(true);
-      setTimeout(() => setBlackFlash(false), 580);
+      setTimeout(() => setBlackFlash(false), 600);
     }
 
     setPlayerAnim(isCrit ? "crit" : "attack");
     setEnemyAnim("hit");
-
-    const nextHp = Math.max(0, enemyHp - dmg);
-    setEnemyHp(nextHp);
-    showPop(isCrit ? `⚡ BLACK FLASH  -${dmg}` : `-${dmg}`, isCrit);
+    const nextEnemyHp = Math.max(0, enemyHp - dmg);
+    setEnemyHp(nextEnemyHp);
+    showPop(isCrit ? `⚡ BLACK FLASH  -${dmg}` : `-${dmg}`, isCrit, "enemy");
 
     setTimeout(() => {
-      setPlayerAnim(nextHp <= 0 ? "win" : "idle");
+      setPlayerAnim(nextEnemyHp <= 0 ? "win" : "idle");
       setEnemyAnim("idle");
-    }, 520);
+    }, 530);
   };
 
   const onWrong = () => {
@@ -465,14 +583,14 @@ export function BattleCharacterDemo() {
     setCombo(0);
     setPlayerAnim("hit");
     setEnemyAnim("attack");
-    const nextHp = Math.max(0, playerHp - SELF_DMG);
-    setPlayerHp(nextHp);
-    showPop(`-${SELF_DMG}`, false);
+    const nextPlayerHp = Math.max(0, playerHp - SELF_DMG);
+    setPlayerHp(nextPlayerHp);
+    showPop(`-${SELF_DMG}`, false, "player");
 
     setTimeout(() => {
       setPlayerAnim("idle");
-      setEnemyAnim(nextHp <= 0 ? "win" : "idle");
-    }, 520);
+      setEnemyAnim(nextPlayerHp <= 0 ? "win" : "idle");
+    }, 530);
   };
 
   const reset = () => {
@@ -486,36 +604,74 @@ export function BattleCharacterDemo() {
     setLastDmg(BASE_DMG);
   };
 
+  // Crit color escalates with combo
   const critColor =
     critChance >= 100
       ? "text-yellow-300"
       : critChance >= 60
-        ? "text-orange-400"
-        : critChance >= 30
-          ? "text-violet-400"
-          : critChance > 0
-            ? "text-violet-500"
-            : "text-zinc-500";
+      ? "text-orange-400"
+      : critChance >= 30
+      ? "text-violet-400"
+      : critChance > 0
+      ? "text-violet-500"
+      : "text-zinc-500";
+
+  const critGlow =
+    critChance >= 100
+      ? "rgba(253,224,71,0.55)"
+      : critChance >= 60
+      ? "rgba(251,146,60,0.45)"
+      : critChance >= 30
+      ? "rgba(167,139,250,0.4)"
+      : critChance > 0
+      ? "rgba(139,92,246,0.3)"
+      : undefined;
+
+  // Equipment definitions
+  const playerEquipment: Equipment = {
+    head: "⛑️",
+    torso: "🥼",
+    weapon: "⚔️",
+    aura: "⚡",
+  };
+
+  const enemyEquipment: Equipment = {
+    head: "💀",
+    torso: "🦹",
+    weapon: "🔱",
+    aura: "🔥",
+  };
 
   return (
     <div className="relative flex min-h-screen flex-col overflow-hidden bg-gradient-to-b from-zinc-950 via-zinc-900 to-black text-zinc-100">
-      {/* ── Black Flash screen effect ─────────────────────────────────── */}
+      {/* ── Black Flash screen effect ── */}
       <AnimatePresence>
         {blackFlash && (
           <motion.div
+            key="black-flash"
             className="pointer-events-none fixed inset-0 z-50"
-            style={{ background: "#1a003a" }}
-            initial={{ opacity: 0.92 }}
-            animate={{ opacity: [0.92, 0.4, 0.85, 0] }}
+            style={{ background: "radial-gradient(ellipse at center, #2a0050, #0a0010)" }}
+            initial={{ opacity: 0.95 }}
+            animate={{ opacity: [0.95, 0.5, 0.9, 0] }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.55, ease: "easeOut" }}
+            transition={{ duration: 0.58, ease: "easeOut" }}
           />
         )}
       </AnimatePresence>
 
+      {/* Ambient background grid */}
+      <div
+        className="pointer-events-none fixed inset-0 opacity-[0.04]"
+        style={{
+          backgroundImage:
+            "linear-gradient(rgba(99,102,241,0.8) 1px, transparent 1px), linear-gradient(90deg, rgba(99,102,241,0.8) 1px, transparent 1px)",
+          backgroundSize: "40px 40px",
+        }}
+      />
+
       <div className="mx-auto flex w-full max-w-md flex-1 flex-col px-4 py-6">
         {/* Title */}
-        <h1 className="mb-4 text-center text-lg font-black tracking-tight text-white">
+        <h1 className="mb-5 text-center text-xl font-black tracking-tight text-white">
           ⚔️ Gordemy Battle
         </h1>
 
@@ -537,33 +693,55 @@ export function BattleCharacterDemo() {
           />
         </div>
 
-        {/* Stats row */}
-        <div className="mb-4 grid grid-cols-3 gap-2">
-          <StatBox label="Урон" value={`${lastDmg}`} />
+        {/* Stats row — HP shown as bars above, so here: Damage + Crit only */}
+        <div className="mb-4 grid grid-cols-2 gap-2">
+          <StatBox label="⚔️ Урон" value={`${lastDmg}`} />
           <StatBox
-            label="Крит ⚡"
+            label="⚡ Крит шанс"
             value={`${critChance}%`}
             color={critColor}
             pulse={critChance > 0}
+            glow={critGlow}
           />
-          <StatBox label="Комбо" value={`×${combo}`} color="text-amber-300" />
         </div>
 
         {/* Battle arena */}
-        <div className="relative mb-4 flex min-h-[228px] items-end justify-around rounded-3xl border border-zinc-800 bg-zinc-950/80 px-4 py-6 shadow-[inset_0_0_60px_rgba(0,0,0,0.6)]">
+        <div className="relative mb-4 flex min-h-[240px] items-end justify-around rounded-3xl border border-zinc-800/60 bg-zinc-950/80 px-4 py-6 shadow-[inset_0_0_80px_rgba(0,0,0,0.7)]">
+          {/* Arena floor glow */}
+          <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-16 rounded-b-3xl bg-gradient-to-t from-indigo-950/40 to-transparent" />
+
           {/* Player */}
-          <div className="flex flex-col items-center gap-1">
-            <EmojiChar anim={playerAnim} auraColor="#6366f1" />
+          <div className="relative flex flex-col items-center gap-1">
+            <BlobChar
+              anim={playerAnim}
+              auraColor="#6366f1"
+              equipment={playerEquipment}
+            />
             <span className="text-[9px] font-bold uppercase tracking-widest text-zinc-600">
               Ти
             </span>
           </div>
 
-          <span className="mb-6 text-xs font-black text-zinc-700">VS</span>
+          {/* VS */}
+          <div className="mb-8 flex flex-col items-center gap-1">
+            <motion.span
+              className="text-xs font-black text-zinc-700"
+              animate={{ scale: [1, 1.08, 1], opacity: [0.6, 1, 0.6] }}
+              transition={{ duration: 2.2, repeat: Infinity }}
+            >
+              VS
+            </motion.span>
+          </div>
 
-          {/* Enemy */}
-          <div className="flex flex-col items-center gap-1">
-            <EmojiChar isEnemy anim={enemyAnim} auraColor="#ef4444" />
+          {/* Enemy (flipped to face player) */}
+          <div className="relative flex flex-col items-center gap-1">
+            <BlobChar
+              isEnemy
+              anim={enemyAnim}
+              auraColor="#ef4444"
+              equipment={enemyEquipment}
+              flipped
+            />
             <span className="text-[9px] font-bold uppercase tracking-widest text-zinc-600">
               Ворог
             </span>
@@ -574,12 +752,17 @@ export function BattleCharacterDemo() {
             {dmgPop && (
               <motion.div
                 key={dmgPop.k}
-                className={`pointer-events-none absolute top-4 left-1/2 -translate-x-1/2 whitespace-nowrap font-black ${
-                  dmgPop.crit ? "text-xl text-yellow-300" : "text-lg text-white"
-                }`}
-                initial={{ y: 0, opacity: 1, scale: dmgPop.crit ? 1.35 : 1 }}
-                animate={{ y: -52, opacity: 0 }}
-                transition={{ duration: 0.8, ease: "easeOut" }}
+                className={`pointer-events-none absolute whitespace-nowrap font-black ${
+                  dmgPop.crit ? "text-2xl text-yellow-300" : "text-xl text-white"
+                } ${dmgPop.side === "enemy" ? "right-8" : "left-8"} top-6`}
+                initial={{ y: 0, opacity: 1, scale: dmgPop.crit ? 1.4 : 1 }}
+                animate={{ y: -60, opacity: 0 }}
+                transition={{ duration: 0.85, ease: "easeOut" }}
+                style={
+                  dmgPop.crit
+                    ? { textShadow: "0 0 20px rgba(253,224,71,0.9)" }
+                    : {}
+                }
               >
                 {dmgPop.text}
               </motion.div>
@@ -587,53 +770,73 @@ export function BattleCharacterDemo() {
           </AnimatePresence>
 
           {/* Game-over overlay */}
-          {isOver && (
-            <motion.div
-              className="absolute inset-0 flex flex-col items-center justify-center gap-2 rounded-3xl bg-black/70 backdrop-blur-sm"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ duration: 0.4 }}
-            >
-              <div className="text-5xl">{playerWon ? "🏆" : "💀"}</div>
-              <div className="text-xl font-black text-white">
-                {playerWon ? "Перемога!" : "Поразка..."}
-              </div>
-            </motion.div>
-          )}
+          <AnimatePresence>
+            {isOver && (
+              <motion.div
+                className="absolute inset-0 flex flex-col items-center justify-center gap-3 rounded-3xl bg-black/75 backdrop-blur-sm"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.4 }}
+              >
+                <motion.div
+                  className="text-6xl"
+                  animate={{ scale: [1, 1.15, 1], rotate: [0, -5, 5, 0] }}
+                  transition={{ duration: 0.8, repeat: Infinity }}
+                >
+                  {playerWon ? "🏆" : "💀"}
+                </motion.div>
+                <div className="text-2xl font-black text-white">
+                  {playerWon ? "Перемога!" : "Поразка..."}
+                </div>
+                {playerWon && (
+                  <div className="text-xs text-amber-400 font-bold">
+                    Комбо: ×{combo} | Крит шанс досягнув {critChance}%
+                  </div>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
 
-        {/* Combo hint */}
+        {/* Combo streak hint */}
         <AnimatePresence>
           {combo >= 2 && !isOver && (
-            <motion.p
-              initial={{ opacity: 0, y: 6 }}
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
-              className="mb-3 text-center text-xs font-bold text-amber-400"
+              className="mb-3 rounded-xl border border-amber-500/30 bg-amber-950/30 px-3 py-2 text-center"
             >
-              🔥 Combo ×{combo} — {critChance}% шанс Black Flash!
-            </motion.p>
+              <span className="text-sm font-black text-amber-400">
+                🔥 Комбо ×{combo}
+              </span>
+              <span className="ml-2 text-xs text-amber-300/80">
+                — {critChance}% шанс Black Flash ⚡
+              </span>
+            </motion.div>
           )}
         </AnimatePresence>
 
         {/* Controls */}
         <div className="mt-auto flex flex-col gap-2">
-          <button
+          <motion.button
             type="button"
             disabled={isOver}
             onClick={onCorrect}
-            className="rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 py-4 text-sm font-black uppercase tracking-wide text-white shadow-lg shadow-emerald-900/40 active:scale-[0.98] disabled:opacity-40"
+            whileTap={{ scale: 0.97 }}
+            className="rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 py-4 text-sm font-black uppercase tracking-wide text-white shadow-lg shadow-emerald-900/40 disabled:opacity-40"
           >
             ✅ Правильна відповідь
-          </button>
-          <button
+          </motion.button>
+          <motion.button
             type="button"
             disabled={isOver}
             onClick={onWrong}
-            className="rounded-2xl border border-rose-900/60 bg-rose-950/40 py-4 text-sm font-black uppercase tracking-wide text-rose-200 active:scale-[0.98] disabled:opacity-40"
+            whileTap={{ scale: 0.97 }}
+            className="rounded-2xl border border-rose-900/60 bg-rose-950/40 py-4 text-sm font-black uppercase tracking-wide text-rose-200 disabled:opacity-40"
           >
             ❌ Неправильна (удар по собі)
-          </button>
+          </motion.button>
           <button
             type="button"
             onClick={reset}

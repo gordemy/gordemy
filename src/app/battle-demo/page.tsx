@@ -1,5 +1,5 @@
-import BattleEquipmentDemo from "./BattleEquipmentDemo";
+import { BattleCharacterDemo } from "@/components/BattleCharacter";
 
 export default function BattleDemoPage() {
-  return <BattleEquipmentDemo />;
+  return <BattleCharacterDemo />;
 }
