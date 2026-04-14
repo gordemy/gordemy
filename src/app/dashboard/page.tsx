@@ -11,12 +11,9 @@ import {
 import { getLeague } from "@/lib/achievements";
 import { getPlayerTitle, getXPMultiplier } from "@/lib/gamification";
 import {
-  HATS, ACCESSORIES, FRAMES,
+  CHARACTERS, HATS, ACCESSORIES, AURAS, FRAMES,
   AURA_STYLES, FRAME_STYLES, DEFAULT_AVATAR,
-  normalizeAvatarFull, type AvatarConfig,
 } from "@/lib/avatar";
-import ModularHero from "@/components/ModularHero";
-import { normalizeToEquip } from "@/lib/equipment";
 import { supabase } from "@/lib/supabase";
 import Link from "next/link";
 
@@ -123,8 +120,7 @@ function CharacterStage({ avatar, student, title }: {
   student: Student & { gems?: number; streak?: number; level?: number; xp?: number };
   title: { title: string; color: string };
 }) {
-  const full = normalizeAvatarFull({ ...DEFAULT_AVATAR, ...avatar } as AvatarConfig);
-  const equip = normalizeToEquip(full);
+  const char  = CHARACTERS.find(c => c.id === avatar.character) || CHARACTERS[0];
   const hat   = HATS.find(h => h.id === avatar.hat);
   const acc   = ACCESSORIES.find(a => a.id === avatar.accessory);
   const auraStyle  = AURA_STYLES[avatar.aura as keyof typeof AURA_STYLES]  ?? "";
@@ -187,13 +183,11 @@ function CharacterStage({ avatar, student, title }: {
         transition={{ duration: 3.5, repeat: Infinity, ease: "easeInOut" }}
         className="relative z-10 mb-4"
       >
-        <div className={`relative flex h-36 w-36 items-center justify-center rounded-full border-4 ${frameStyle} ${auraStyle} shadow-2xl`}>
-          <ModularHero
-            equip={equip}
-            hatEmoji={hat && hat.id !== "none" ? hat.emoji : undefined}
-            height={128}
-            className="scale-90"
-          />
+        <div className={`relative w-36 h-36 rounded-full flex items-center justify-center border-4 ${frameStyle} ${auraStyle} shadow-2xl`}>
+          <span className="text-8xl select-none">{char.emoji}</span>
+          {hat && hat.id !== "none" && (
+            <span className="absolute -top-5 right-0 text-4xl drop-shadow-lg">{hat.emoji}</span>
+          )}
           {acc && acc.id !== "none" && (
             <span className="absolute -bottom-2 -right-3 text-3xl drop-shadow-lg">{acc.emoji}</span>
           )}
@@ -226,6 +220,68 @@ function CharacterStage({ avatar, student, title }: {
         </div>
       </div>
 
+      {/* ── 3 Equipment Slots ── */}
+      <div className="w-full max-w-xs mt-4 z-10">
+        <div className="text-[10px] font-bold uppercase tracking-widest text-gordemy-muted mb-2 text-center">
+          ⚔️ Екіпіровка
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          {/* Weapon slot */}
+          <Link href="/avatar">
+            <motion.div
+              whileHover={{ scale: 1.06 }}
+              whileTap={{ scale: 0.94 }}
+              className="flex flex-col items-center gap-1 rounded-2xl border border-gordemy-border bg-gordemy-card p-2.5 cursor-pointer hover:border-gordemy-blue/50 transition-colors"
+            >
+              <motion.span
+                className="text-2xl"
+                animate={{ rotate: [-8, 8, -8] }}
+                transition={{ duration: 2.2, repeat: Infinity, ease: "easeInOut" }}
+              >
+                {acc && acc.id !== "none" ? acc.emoji : "⚔️"}
+              </motion.span>
+              <span className="text-[9px] font-bold text-gordemy-muted uppercase tracking-wide">Зброя</span>
+            </motion.div>
+          </Link>
+
+          {/* Aura slot */}
+          <Link href="/avatar">
+            <motion.div
+              whileHover={{ scale: 1.06 }}
+              whileTap={{ scale: 0.94 }}
+              className="flex flex-col items-center gap-1 rounded-2xl border border-gordemy-border bg-gordemy-card p-2.5 cursor-pointer hover:border-gordemy-purple/50 transition-colors"
+            >
+              <motion.span
+                className="text-2xl"
+                animate={{ scale: [1, 1.18, 1], opacity: [0.75, 1, 0.75] }}
+                transition={{ duration: 1.8, repeat: Infinity, ease: "easeInOut" }}
+              >
+                {avatar.aura && avatar.aura !== "none" ? "✨" : "🌀"}
+              </motion.span>
+              <span className="text-[9px] font-bold text-gordemy-muted uppercase tracking-wide">Аура</span>
+            </motion.div>
+          </Link>
+
+          {/* Title slot */}
+          <Link href="/avatar">
+            <motion.div
+              whileHover={{ scale: 1.06 }}
+              whileTap={{ scale: 0.94 }}
+              className="flex flex-col items-center gap-1 rounded-2xl border border-gordemy-border bg-gordemy-card p-2.5 cursor-pointer hover:border-yellow-500/50 transition-colors"
+            >
+              <motion.span
+                className="text-2xl"
+                animate={{ y: [0, -3, 0] }}
+                transition={{ duration: 2.5, repeat: Infinity, ease: "easeInOut" }}
+              >
+                {hat && hat.id !== "none" ? hat.emoji : "👑"}
+              </motion.span>
+              <span className="text-[9px] font-bold text-gordemy-muted uppercase tracking-wide">Титул</span>
+            </motion.div>
+          </Link>
+        </div>
+      </div>
+
       {/* Avatar link */}
       <Link href="/avatar" className="mt-3 z-10">
         <motion.button
@@ -233,7 +289,7 @@ function CharacterStage({ avatar, student, title }: {
           whileTap={{ scale: 0.95 }}
           className="text-xs text-gordemy-muted hover:text-gordemy-blue border border-gordemy-border hover:border-gordemy-blue/50 px-3 py-1 rounded-xl transition-all"
         >
-          🎨 Змінити аватар
+          🎨 Змінити екіпіровку
         </motion.button>
       </Link>
     </div>

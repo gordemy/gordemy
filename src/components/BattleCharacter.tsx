@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { SPRITE_SET, type BattleAnim } from "@/lib/battle-character-sprites";
+import { ChestPopup, type ChestTier } from "@/components/chest-popup";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EXISTING BattleCharacter — used by /boss and /ghost. API is frozen.
@@ -525,6 +526,14 @@ function StatBox({
   );
 }
 
+/** Choose chest tier based on max combo reached during battle */
+function comboToChestTier(maxCombo: number): ChestTier {
+  if (maxCombo >= 5) return "legendary";
+  if (maxCombo >= 4) return "gold";
+  if (maxCombo >= 3) return "silver";
+  return "bronze";
+}
+
 // ── Battle Demo page ──────────────────────────────────────────────────────────
 export function BattleCharacterDemo() {
   const P_MAX = 100;
@@ -536,11 +545,13 @@ export function BattleCharacterDemo() {
   const [playerHp, setPlayerHp] = useState(P_MAX);
   const [enemyHp, setEnemyHp] = useState(E_MAX);
   const [combo, setCombo] = useState(0);
+  const [maxCombo, setMaxCombo] = useState(0);
   const [playerAnim, setPlayerAnim] = useState<DemoAnim>("idle");
   const [enemyAnim, setEnemyAnim] = useState<DemoAnim>("idle");
   const [dmgPop, setDmgPop] = useState<{ text: string; crit: boolean; side: "enemy" | "player"; k: number } | null>(null);
   const [blackFlash, setBlackFlash] = useState(false);
   const [lastDmg, setLastDmg] = useState(BASE_DMG);
+  const [chestTier, setChestTier] = useState<ChestTier | null>(null);
   const popKey = useRef(0);
 
   const critChance = getCritChance(combo);
@@ -556,6 +567,7 @@ export function BattleCharacterDemo() {
     if (isOver) return;
     const nc = combo + 1;
     setCombo(nc);
+    setMaxCombo(prev => Math.max(prev, nc));
     const chance = getCritChance(nc);
     const isCrit = Math.random() * 100 < chance;
     const dmg = Math.round(isCrit ? BASE_DMG * CRIT_MULT : BASE_DMG);
@@ -575,6 +587,10 @@ export function BattleCharacterDemo() {
     setTimeout(() => {
       setPlayerAnim(nextEnemyHp <= 0 ? "win" : "idle");
       setEnemyAnim("idle");
+      // 🎁 Show chest after victory — tier depends on max combo
+      if (nextEnemyHp <= 0) {
+        setTimeout(() => setChestTier(comboToChestTier(Math.max(maxCombo, nc))), 1400);
+      }
     }, 530);
   };
 
@@ -597,11 +613,13 @@ export function BattleCharacterDemo() {
     setPlayerHp(P_MAX);
     setEnemyHp(E_MAX);
     setCombo(0);
+    setMaxCombo(0);
     setPlayerAnim("idle");
     setEnemyAnim("idle");
     setDmgPop(null);
     setBlackFlash(false);
     setLastDmg(BASE_DMG);
+    setChestTier(null);
   };
 
   // Crit color escalates with combo
@@ -644,6 +662,17 @@ export function BattleCharacterDemo() {
 
   return (
     <div className="relative flex min-h-screen flex-col overflow-hidden bg-gradient-to-b from-zinc-950 via-zinc-900 to-black text-zinc-100">
+      {/* 🎁 Chest popup after win */}
+      <AnimatePresence>
+        {chestTier && (
+          <ChestPopup
+            tier={chestTier}
+            userId=""
+            onClose={() => { setChestTier(null); reset(); }}
+          />
+        )}
+      </AnimatePresence>
+
       {/* ── Black Flash screen effect ── */}
       <AnimatePresence>
         {blackFlash && (
